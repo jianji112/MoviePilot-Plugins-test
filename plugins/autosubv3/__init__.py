@@ -59,15 +59,15 @@ class TaskItem:
 
 class AutoSubv3(_PluginBase):
     # 插件名称
-    plugin_name = "魔改自用版"
+    plugin_name = "AI字幕生成魔改版(v3)"
     # 插件描述
-    plugin_desc = "基于autosubv2魔改自用版"
+    plugin_desc = "使用whisper自动转写字幕，配合ai模型翻译字幕成中文，自用修改版，支持最新openai接口，改成并发，翻译速度加倍。"
     # 插件图标
     plugin_icon = "autosubtitles.jpeg"
     # 主题色
     plugin_color = "#2C4F7E"
     # 插件版本
-    plugin_version = "3.5.2"
+    plugin_version = "3.5.3"
     # 插件作者
     plugin_author = "jianji112"
     # 作者主页
