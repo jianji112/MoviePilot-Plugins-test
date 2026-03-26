@@ -3,13 +3,13 @@
     "name": "AutoSubv3魔改自用版",
     "description": "基于autosubv2魔改自用版，AI字幕自动生成并翻译。",
     "labels": "字幕,翻译",
-    "version": "3.4.1",
+    "version": "3.5.0",
     "icon": "autosubtitles.jpeg",
     "author": "jianji112",
     "level": 1,
     "v2": true,
     "history": {
-      "v3.4.1": "适配 MP v2，修复 httpx 导入问题"
+      "v3.5.0": "新增并行翻译，多线程并发处理字幕批次，速度大幅提升"
     }
   }
 }

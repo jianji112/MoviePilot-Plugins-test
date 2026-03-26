@@ -14,6 +14,7 @@ from lxml import etree
 from dataclasses import dataclass
 from enum import Enum
 import queue
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
 from uuid import uuid4
 from app.core.config import settings
@@ -66,7 +67,7 @@ class AutoSubv3(_PluginBase):
     # 主题色
     plugin_color = "#2C4F7E"
     # 插件版本
-    plugin_version = "3.4.1"
+    plugin_version = "3.5.0"
     # 插件作者
     plugin_author = "jianji112"
     # 作者主页
@@ -97,6 +98,7 @@ class AutoSubv3(_PluginBase):
     _openai = None
     _enable_batch = None
     _batch_size = None
+    _parallel_workers = None
     _context_window = None
     _max_retries = None
     _enable_merge = None
@@ -159,6 +161,7 @@ class AutoSubv3(_PluginBase):
                                   model=openai_model, compatible=bool(compatible))
             self._enable_batch = config.get('enable_batch', True)
             self._batch_size = int(config.get('batch_size')) if config.get('batch_size') else 10
+            self._parallel_workers = int(config.get('parallel_workers')) if config.get('parallel_workers') else 5
             self._context_window = int(config.get('context_window')) if config.get('context_window') else 5
             self._max_retries = int(config.get('max_retries')) if config.get('max_retries') else 3
             self._enable_merge = config.get('enable_merge', False)
@@ -887,20 +890,7 @@ class AutoSubv3(_PluginBase):
             return
             
         self._stats['total'] = len(valid_subs)
-        processed = []
-        current_batch = []
-
-        for item in valid_subs:
-            current_batch.append(item)
-
-            if len(current_batch) >= self._batch_size:
-                processed += self.__process_items(valid_subs, current_batch)
-                current_batch = []
-                logger.info(f"进度: {len(processed)}/{len(valid_subs)}")
-
-        if current_batch:
-            processed += self.__process_items(valid_subs, current_batch)
-
+        processed = self.__translate_parallel(valid_subs)
         self.__save_srt(dest_subtitle, processed)
         
         success_rate = (self._stats['batch_success'] / self._stats['total'] * 100) if self._stats['total'] > 0 else 0.0
@@ -912,6 +902,74 @@ class AutoSubv3(_PluginBase):
     批次失败: {self._stats['batch_fail']}
     行补偿翻译: {self._stats['line_fallback']}
             """)
+
+    def __translate_parallel(self, valid_subs: list):
+        """
+        并行翻译字幕，使用 ThreadPoolExecutor 多线程并发处理批次
+        批次按原始索引排序合并，保证顺序正确
+        """
+        total = len(valid_subs)
+        batch_size = self._batch_size
+        workers = self._parallel_workers
+
+        # 将字幕拆分为批次，每批包含 (全局索引, 字幕对象)
+        batches = []
+        for i in range(0, total, batch_size):
+            batch_items = valid_subs[i:i + batch_size]
+            # 建立 索引->字幕对象 的映射
+            batch_map = {}
+            for j, item in enumerate(batch_items):
+                batch_map[j] = item
+            batches.append((i, batch_map))
+
+        logger.info(f"并行翻译：共 {len(batches)} 批次，每批最多 {batch_size} 行，并发 {workers} 线程")
+
+        results = {}  # 最终结果：idx -> 处理后的字幕对象
+
+        def process_batch(batch_start_idx, batch_map):
+            """在子线程中执行：尝试批量翻译，失败则降级单行"""
+            batch_list = list(batch_map.values())
+            indices = list(batch_map.keys())
+
+            # 尝试批量翻译
+            try:
+                context = self.__get_context(valid_subs, indices, is_batch=True) if self._context_window > 0 else None
+                batch_text = '\n'.join([item.content.strip() for item in batch_list])
+                ret, result = self.__translate_to_zh(batch_text, context)
+                if ret:
+                    translated_lines = [line.strip() for line in result.split('\n') if line.strip()]
+                    if len(translated_lines) == len(batch_list):
+                        for idx, trans in zip(indices, translated_lines):
+                            batch_map[idx].content = f"{trans}\n{batch_map[idx].content}"
+                        return {idx: batch_map[idx] for idx in indices}
+            except Exception as e:
+                logger.debug(f"批次 {batch_start_idx} 翻译失败，降级单行：{e}")
+
+            # 降级：逐行翻译
+            for idx in indices:
+                item = batch_map[idx]
+                item_context = self.__get_context(valid_subs, [idx], is_batch=False) if self._context_window > 0 else None
+                success, trans = self.__translate_to_zh(item.content, item_context)
+                if success:
+                    item.content = f"{trans}\n{item.content}"
+            return {idx: batch_map[idx] for idx in indices}
+
+        # 并行执行
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = {executor.submit(process_batch, start_idx, bmap): start_idx
+                       for start_idx, bmap in batches}
+
+            for future in as_completed(futures):
+                batch_results = future.result()
+                results.update(batch_results)
+                done_count = len(results)
+                logger.info(f"进度: {done_count}/{total}")
+
+        # 按索引排序返回
+        processed = [results[i] for i in sorted(results.keys())]
+        self._stats['batch_success'] = len(batches)
+        self._stats['line_fallback'] = total - self._stats['batch_success'] * batch_size
+        return processed
 
     @staticmethod
     def __external_subtitle_exists(video_file, prefer_langs=None, only_srt=False, strict=True):
@@ -1485,6 +1543,20 @@ class AutoSubv3(_PluginBase):
                                                                 }
                                                             }
                                                         ]
+                                                    },
+                                                    {
+                                                        'component': 'VCol',
+                                                        'props': {'cols': 12, 'md': 4, 'v-show': 'enable_batch'},
+                                                        'content': [
+                                                            {
+                                                                'component': 'VTextField',
+                                                                'props': {
+                                                                    'model': 'parallel_workers',
+                                                                    'label': '并发线程数',
+                                                                    'placeholder': '5'
+                                                                }
+                                                            }
+                                                        ]
                                                     }
                                                 ]
                                             }
@@ -1559,6 +1631,7 @@ class AutoSubv3(_PluginBase):
             "enable_merge": False,
             "enable_batch": True,
             "batch_size": 10,
+            "parallel_workers": 5,
         }
 
     def get_api(self) -> List[Dict[str, Any]]:
