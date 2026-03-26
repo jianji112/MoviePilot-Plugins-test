@@ -119,8 +119,8 @@ class AutoSubv3(_PluginBase):
         self._enabled = config.get('enabled', False)
         self._clear_history = config.get('clear_history', False)
         self._listen_transfer_event = config.get('listen_transfer_event', True)
-            whitelist_str = config.get('path_whitelist', '').strip()
-            self._path_whitelist = [p.strip() for p in whitelist_str.split('\n') if p.strip()] if whitelist_str else []
+        whitelist_str = config.get('path_whitelist', '').strip()
+        self._path_whitelist = [p.strip() for p in whitelist_str.split('\n') if p.strip()] if whitelist_str else []
         self._run_now = config.get('run_now')
         if self._run_now:
             self._path_list = list(set(config.get('path_list').split('\n')))
