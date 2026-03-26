@@ -67,11 +67,11 @@ class AutoSubv3(_PluginBase):
     # 主题色
     plugin_color = "#2C4F7E"
     # 插件版本
-    plugin_version = "3.5.0"
+    plugin_version = "3.5.1"
     # 插件作者
     plugin_author = "jianji112"
     # 作者主页
-    author_url = "https://github.com/TimoYoung"
+    author_url = "https://github.com/jianji112"
     # 插件配置项ID前缀
     plugin_config_prefix = "autosubv3"
     # 加载顺序
@@ -916,20 +916,20 @@ class AutoSubv3(_PluginBase):
         batches = []
         for i in range(0, total, batch_size):
             batch_items = valid_subs[i:i + batch_size]
-            # 建立 索引->字幕对象 的映射
+            # 建立 全局索引->字幕对象 的映射
             batch_map = {}
             for j, item in enumerate(batch_items):
-                batch_map[j] = item
+                batch_map[i + j] = item  # 用全局索引 i+j
             batches.append((i, batch_map))
 
         logger.info(f"并行翻译：共 {len(batches)} 批次，每批最多 {batch_size} 行，并发 {workers} 线程")
 
-        results = {}  # 最终结果：idx -> 处理后的字幕对象
+        results = {}  # 最终结果：全局idx -> 处理后的字幕对象
 
         def process_batch(batch_start_idx, batch_map):
             """在子线程中执行：尝试批量翻译，失败则降级单行"""
             batch_list = list(batch_map.values())
-            indices = list(batch_map.keys())
+            indices = list(batch_map.keys())  # 全局索引列表
 
             # 尝试批量翻译
             try:
@@ -939,20 +939,20 @@ class AutoSubv3(_PluginBase):
                 if ret:
                     translated_lines = [line.strip() for line in result.split('\n') if line.strip()]
                     if len(translated_lines) == len(batch_list):
-                        for idx, trans in zip(indices, translated_lines):
-                            batch_map[idx].content = f"{trans}\n{batch_map[idx].content}"
-                        return {idx: batch_map[idx] for idx in indices}
+                        for gidx, trans in zip(indices, translated_lines):
+                            batch_map[gidx].content = f"{trans}\n{batch_map[gidx].content}"
+                        return {gidx: batch_map[gidx] for gidx in indices}
             except Exception as e:
                 logger.debug(f"批次 {batch_start_idx} 翻译失败，降级单行：{e}")
 
             # 降级：逐行翻译
-            for idx in indices:
-                item = batch_map[idx]
-                item_context = self.__get_context(valid_subs, [idx], is_batch=False) if self._context_window > 0 else None
+            for gidx in indices:
+                item = batch_map[gidx]
+                item_context = self.__get_context(valid_subs, [gidx], is_batch=False) if self._context_window > 0 else None
                 success, trans = self.__translate_to_zh(item.content, item_context)
                 if success:
                     item.content = f"{trans}\n{item.content}"
-            return {idx: batch_map[idx] for idx in indices}
+            return {gidx: batch_map[gidx] for gidx in indices}
 
         # 并行执行
         with ThreadPoolExecutor(max_workers=workers) as executor:
@@ -1587,7 +1587,7 @@ class AutoSubv3(_PluginBase):
                                             {
                                                 'component': 'a',
                                                 'props': {
-                                                    'href': 'https://github.com/jianji112/moviepilot-plugins/blob/main/plugins/autosubv3/README.md',
+                                                    'href': 'https://github.com/jianji112/MoviePilot-Plugins/blob/main/plugins/autosubv3/README.md',
                                                     'target': '_blank'
                                                 },
                                                 'content': [
