@@ -67,7 +67,7 @@ class AutoSubv3(_PluginBase):
     # 主题色
     plugin_color = "#2C4F7E"
     # 插件版本
-    plugin_version = "3.5.6"
+    plugin_version = "3.5.7"
     # 插件作者
     plugin_author = "jianji112"
     # 作者主页
@@ -89,6 +89,7 @@ class AutoSubv3(_PluginBase):
     _enabled = None
     _clear_history = None
     _listen_transfer_event = None
+    _path_whitelist = None
     _send_notify = None
     _translate_preference = None
     _run_now = None
@@ -118,6 +119,8 @@ class AutoSubv3(_PluginBase):
         self._enabled = config.get('enabled', False)
         self._clear_history = config.get('clear_history', False)
         self._listen_transfer_event = config.get('listen_transfer_event', True)
+            whitelist_str = config.get('path_whitelist', '').strip()
+            self._path_whitelist = [p.strip() for p in whitelist_str.split('\n') if p.strip()] if whitelist_str else []
         self._run_now = config.get('run_now')
         if self._run_now:
             self._path_list = list(set(config.get('path_list').split('\n')))
@@ -314,19 +317,25 @@ class AutoSubv3(_PluginBase):
 
         for file_path in item_file_list:
             if os.path.splitext(file_path)[-1].lower() in settings.RMT_MEDIAEXT:
-                self.add_task(file_path, TaskSource.EVENT)
+                if not self._path_whitelist or any(file_path.startswith(wp) for wp in self._path_whitelist):
+                    self.add_task(file_path, TaskSource.EVENT)
+                else:
+                    logger.debug(f"文件不在白名单路径内，跳过：{file_path}")
 
     def _run_at_once(self, path_list: List[str]):
-        # 依次处理每个目录
-        for path in path_list:
+        # 依次处理每个目录，白名单路径优先
+        effective_paths = self._path_whitelist if self._path_whitelist else path_list
+        for path in effective_paths:
             if not os.path.exists(path) or not os.path.isabs(path):
                 logger.warn(f"目录/文件无效，不进行处理:{path}")
                 continue
             if os.path.isdir(path):
                 for video_file in self.__get_library_files(path):
-                    self.add_task(video_file, TaskSource.MANUAL)
+                    if not self._path_whitelist or any(video_file.startswith(wp) for wp in self._path_whitelist):
+                        self.add_task(video_file, TaskSource.MANUAL)
             elif os.path.splitext(path)[-1].lower() in settings.RMT_MEDIAEXT:
-                self.add_task(path, TaskSource.MANUAL)
+                if not self._path_whitelist or any(path.startswith(wp) for wp in self._path_whitelist):
+                    self.add_task(path, TaskSource.MANUAL)
 
     def __check_asr(self):
         if not self._faster_whisper_model_path or not self._faster_whisper_model:
@@ -1177,6 +1186,22 @@ class AutoSubv3(_PluginBase):
                             },
                             {
                                 'component': 'VCol',
+                                'props': {'cols': 12, 'md': 12},
+                                'content': [
+                                    {
+                                        'component': 'VTextarea',
+                                        'props': {
+                                            'model': 'path_whitelist',
+                                            'label': '路径白名单（每行一个）',
+                                            'rows': 3,
+                                            'placeholder': '/mnt/media/movies\n/downloads',
+                                            'hint': '只处理指定路径下的文件入库事件，为空则处理所有路径'
+                                        }
+                                    }
+                                ]
+                            },
+                            {
+                                'component': 'VCol',
                                 'props': {'cols': 12, 'md': 4},
                                 'content': [
                                     {
@@ -1641,6 +1666,7 @@ class AutoSubv3(_PluginBase):
             "clear_history": False,
             "send_notify": False,
             "listen_transfer_event": True,
+            "path_whitelist": "",
             "run_now": False,
             "path_list": "",
             "file_size": "10",
