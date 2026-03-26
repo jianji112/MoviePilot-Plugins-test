@@ -1,0 +1,15 @@
+{
+  "AutoSubv3": {
+    "name": "魔改自用版",
+    "description": "基于autosubv2魔改自用版，AI字幕自动生成并翻译。",
+    "labels": "字幕,翻译",
+    "version": "3.0",
+    "icon": "autosubtitles.jpeg",
+    "author": "jianji112",
+    "level": 2,
+    "v2": true,
+    "history": {
+      "v3.0": "基于autosubv2魔改，初始版本"
+    }
+  }
+}
