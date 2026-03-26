@@ -1,15 +1,15 @@
 {
   "AutoSubv3": {
     "name": "AI字幕生成魔改版(v3)",
-    "description": "使用whisper自动转写字幕，配合ai模型翻译字幕成中文，自用修改版，支持最新openai接口，改成并发，翻译速度加倍。",
+    "description": "自动生成字幕并翻译成中文，支持最新openai sdk，改成并发，翻译速度加倍；自用修改版；",
     "labels": "字幕,翻译",
-    "version": "3.5.3",
+    "version": "3.5.4",
     "icon": "autosubtitles.jpeg",
     "author": "jianji112",
     "level": 1,
     "v2": true,
     "history": {
-      "v3.5.3": "所有语言字幕按最大时长/字符分段，whisper统一用word-level"
+      "v3.5.4": "所有语言字幕按最大时长/字符分段，whisper统一用word-level"
     }
   }
 }
