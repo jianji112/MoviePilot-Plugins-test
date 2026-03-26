@@ -67,7 +67,7 @@ class AutoSubv3(_PluginBase):
     # 主题色
     plugin_color = "#2C4F7E"
     # 插件版本
-    plugin_version = "3.5.4"
+    plugin_version = "3.5.5"
     # 插件作者
     plugin_author = "jianji112"
     # 作者主页
@@ -897,11 +897,7 @@ class AutoSubv3(_PluginBase):
     def __translate_zh_subtitle(self, source_lang: str, source_subtitle: str, dest_subtitle: str):
         self._stats = {'total': 0, 'batch_success': 0, 'batch_fail': 0, 'line_fallback': 0}
         subs = self.__load_srt(source_subtitle)
-        if source_lang in ["en", "eng"] and self._enable_merge:
-            valid_subs = self.__merge_srt(subs)
-            logger.info(f"英文字幕合并：合并前字幕数: {len(subs)},合并后字幕数: {len(valid_subs)}")
-        else:
-            valid_subs = subs
+        valid_subs = subs  # ASR阶段已统一做word-level合并，翻译时不再重复合并
         
         if not valid_subs:
             logger.warning("字幕文件为空或没有有效的字幕条目，跳过翻译")
