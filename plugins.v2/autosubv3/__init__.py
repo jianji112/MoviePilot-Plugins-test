@@ -1758,8 +1758,7 @@ class AutoSubv3(_PluginBase):
                                     "size": "x-small",
                                     "color": "error",
                                     "variant": "text",
-                                    "onclick": f"plugin.stop_task('{task_id}')",
-                                    "v-show": f"task.status === '{task.status.name}' && '{task.status.name}' === 'IN_PROGRESS'"
+                                    "onclick": f"plugin.stop_task('{task_id}')"
                                 },
                                 "text": "停止"
                             }
