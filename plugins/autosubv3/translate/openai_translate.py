@@ -3,6 +3,7 @@ import random
 from typing import List, Union
 
 import openai
+from openai import httpx
 from cacheout import Cache
 
 OpenAISessionCache = Cache(maxsize=100, ttl=3600, timer=time.time, default=None)
@@ -11,22 +12,21 @@ OpenAISessionCache = Cache(maxsize=100, ttl=3600, timer=time.time, default=None)
 class OpenAi:
     _api_key: str = None
     _api_url: str = None
-    _model: str = "gpt-3.5-turbo"
+    _model: str = "gpt-4o-mini"
 
     def __init__(self, api_key: str = None, api_url: str = None, proxy: dict = None, model: str = None,
                  compatible: bool = False):
         self._api_key = api_key
         self._api_url = api_url
         base_url = self._api_url if compatible else self._api_url + "/v1"
-        
+
         # 创建 OpenAI 客户端实例
         if proxy and proxy.get("https"):
-            import httpx
             http_client = httpx.Client(proxies=proxy.get("https"))
             self.client = openai.OpenAI(api_key=self._api_key, base_url=base_url, http_client=http_client)
         else:
             self.client = openai.OpenAI(api_key=self._api_key, base_url=base_url)
-        
+
         if model:
             self._model = model
 
@@ -74,7 +74,6 @@ class OpenAi:
 
     def __get_model(self, message: Union[str, List[dict]],
                     prompt: str = None,
-                    user: str = "MoviePilot",
                     **kwargs):
         """
         获取模型
@@ -100,7 +99,6 @@ class OpenAi:
                 ]
         return self.client.chat.completions.create(
             model=self._model,
-            user=user,
             messages=message,
             **kwargs
         )
@@ -129,7 +127,7 @@ class OpenAi:
 4. 按行翻译待译内容。翻译结果不要包括上下文。
 5. 输出内容必须仅包括译文。不要输出任何开场白，解释说明或总结"""
         user_prompt = f"翻译上下文：\n{context}\n\n需要翻译的内容：\n{text}" if context else f"请翻译：\n{text}"
-        
+
         last_error = ""
         for attempt in range(max_retries + 1):
             try:
