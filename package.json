@@ -3,7 +3,7 @@
     "name": "AutoSubv3魔改自用版",
     "description": "基于autosubv2魔改自用版，AI字幕自动生成并翻译。",
     "labels": "字幕,翻译",
-    "version": "3.2",
+    "version": "3.3",
     "icon": "autosubtitles.jpeg",
     "author": "jianji112",
     "level": 1,
@@ -11,7 +11,7 @@
     "history": {
       "v3.0": "基于autosubv2魔改，初始版本",
       "v3.1": "升级 OpenAI SDK v2，默认模型改为 gpt-4o-mini",
-      "v3.2": "适配 MP v2 版本"
+      "v3.3": "修复 httpx 导入兼容"
     }
   }
 }

@@ -3,7 +3,7 @@ import random
 from typing import List, Union
 
 import openai
-from openai import httpx
+import httpx
 from cacheout import Cache
 
 OpenAISessionCache = Cache(maxsize=100, ttl=3600, timer=time.time, default=None)

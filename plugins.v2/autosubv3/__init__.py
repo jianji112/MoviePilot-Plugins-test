@@ -66,7 +66,7 @@ class AutoSubv3(_PluginBase):
     # 主题色
     plugin_color = "#2C4F7E"
     # 插件版本
-    plugin_version = "3.1"
+    plugin_version = "3.3"
     # 插件作者
     plugin_author = "jianji112"
     # 作者主页
