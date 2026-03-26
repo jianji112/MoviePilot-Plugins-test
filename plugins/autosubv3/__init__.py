@@ -24,8 +24,8 @@ from app.schemas.types import NotificationType, EventType
 from app.log import logger
 from app.plugins import _PluginBase
 from app.utils.system import SystemUtils
-from plugins.autosubv2.ffmpeg import Ffmpeg
-from plugins.autosubv2.translate.openai_translate import OpenAi
+from plugins.autosubv3.ffmpeg import Ffmpeg
+from plugins.autosubv3.translate.openai_translate import OpenAi
 
 
 class UserInterruptException(Exception):
@@ -1515,7 +1515,7 @@ class AutoSubv3(_PluginBase):
                                             {
                                                 'component': 'a',
                                                 'props': {
-                                                    'href': 'https://github.com/jxxghp/MoviePilot-Plugins/blob/main/plugins/autosubv2/README.md',
+                                                    'href': 'https://github.com/jianji112/moviepilot-plugins/blob/main/plugins/autosubv3/README.md',
                                                     'target': '_blank'
                                                 },
                                                 'content': [
