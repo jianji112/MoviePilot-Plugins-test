@@ -3,13 +3,13 @@
     "name": "AutoSubv3魔改自用版",
     "description": "基于autosubv2魔改自用版，AI字幕自动生成并翻译。",
     "labels": "字幕,翻译",
-    "version": "3.5.1",
+    "version": "3.5.2",
     "icon": "autosubtitles.jpeg",
     "author": "jianji112",
     "level": 1,
     "v2": true,
     "history": {
-      "v3.5.1": "修复并行翻译索引bug，进度显示正确；作者链接改为自己"
+      "v3.5.2": "所有语言字幕按最大时长/字符分段，whisper统一用word-level"
     }
   }
 }

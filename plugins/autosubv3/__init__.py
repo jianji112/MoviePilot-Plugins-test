@@ -67,7 +67,7 @@ class AutoSubv3(_PluginBase):
     # 主题色
     plugin_color = "#2C4F7E"
     # 插件版本
-    plugin_version = "3.5.1"
+    plugin_version = "3.5.2"
     # 插件作者
     plugin_author = "jianji112"
     # 作者主页
@@ -107,6 +107,8 @@ class AutoSubv3(_PluginBase):
     _huggingface_proxy = None
     _faster_whisper_model_path = None
     _faster_whisper_model = None
+    _max_segment_duration = None
+    _max_segment_chars = None
 
     def init_plugin(self, config=None):
         # 如果没有配置信息， 则不处理
@@ -130,6 +132,8 @@ class AutoSubv3(_PluginBase):
                                                          self.get_data_path() / "faster-whisper-models")
             self._huggingface_proxy = config.get('proxy', True)
             self._auto_detect_language = config.get('auto_detect_language', False)
+            self._max_segment_duration = float(config.get('max_segment_duration')) if config.get('max_segment_duration') else 8.0
+            self._max_segment_chars = int(config.get('max_segment_chars')) if config.get('max_segment_chars') else 50
         self._translate_zh = config.get('translate_zh', False)
         if self._translate_zh:
             use_chatgpt = config.get('use_chatgpt', True)
@@ -436,29 +440,29 @@ class AutoSubv3(_PluginBase):
                     raise e
 
             subs = []
-            if lang in ['en', 'eng']:
-                # 英文先生成单词级别字幕，再合并
-                idx = 0
-                for segment in segments:
-                    if self._event.is_set():
-                        logger.info(f"whisper音轨转录服务停止")
-                        raise UserInterruptException(f"用户中断当前任务")
+            # 所有语言都用 word-level 字幕，再按最大时长/字数合并
+            idx = 0
+            for segment in segments:
+                if self._event.is_set():
+                    logger.info(f"whisper音轨转录服务停止")
+                    raise UserInterruptException(f"用户中断当前任务")
+                if segment.words:
+                    # 有单词级时间戳，逐词添加
                     for word in segment.words:
                         idx += 1
                         subs.append(srt.Subtitle(index=idx,
                                                  start=timedelta(seconds=word.start),
                                                  end=timedelta(seconds=word.end),
                                                  content=word.word))
-                subs = self.__merge_srt(subs)
-            else:
-                for i, segment in enumerate(segments):
-                    if self._event.is_set():
-                        logger.info(f"whisper音轨转录服务停止")
-                        raise UserInterruptException(f"用户中断当前任务")
-                    subs.append(srt.Subtitle(index=i,
+                else:
+                    # 无单词级时间戳，使用整段
+                    idx += 1
+                    subs.append(srt.Subtitle(index=idx,
                                              start=timedelta(seconds=segment.start),
                                              end=timedelta(seconds=segment.end),
                                              content=segment.text))
+            # 按最大时长和最大字数合并
+            subs = self.__merge_srt(subs)
             self.__save_srt(f"{audio_file}.srt", subs)
             logger.info(f"音轨转字幕完成")
             return True, lang
@@ -638,21 +642,25 @@ class AutoSubv3(_PluginBase):
         with open(file_path, 'w', encoding="utf8") as f:
             f.write(srt.compose(srt_data))
 
-    def __merge_srt(self, subtitle_data):
+    def __merge_srt(self, subtitle_data, max_duration=None, max_chars=None):
         """
-        合并整句字幕
-        :param subtitle_data:
+        将单词级字幕按句子合并，并强制按最大时长/字数切分
+        :param subtitle_data: 单词级字幕列表
+        :param max_duration: 每段最大时长（秒），默认用 self._max_segment_duration
+        :param max_chars: 每段最大字符数，默认用 self._max_segment_chars
         :return:
         """
+        if max_duration is None:
+            max_duration = self._max_segment_duration or 8.0
+        if max_chars is None:
+            max_chars = self._max_segment_chars or 50
+
         subtitle_data = copy.deepcopy(subtitle_data)
-        # 合并字幕
         merged_subtitle = []
         sentence_end = True
         end_tokens = ['.', '!', '?', '。', '！', '？', '。"', '！"', '？"', '."', '!"', '?"']
         for index, item in enumerate(subtitle_data):
-            # 当前字幕先将多行合并为一行，再去除首尾空格
             content = item.content.replace('\n', ' ').strip()
-            # 去除html标签
             parse = etree.HTML(content)
             if parse is not None:
                 content = parse.xpath('string(.)')
@@ -660,22 +668,34 @@ class AutoSubv3(_PluginBase):
                 continue
             item.content = content
 
-            # 背景音等字幕，跳过
             if self.__is_noisy_subtitle(content):
                 merged_subtitle.append(item)
                 sentence_end = True
                 continue
 
+            # 计算当前字幕时长（秒）
+            item_duration = (item.end - item.start).total_seconds()
+
             if not merged_subtitle or sentence_end:
                 merged_subtitle.append(item)
-            elif not sentence_end:
-                merged_subtitle[-1].content = f"{merged_subtitle[-1].content} {content}"
-                merged_subtitle[-1].end = item.end
+                sentence_end = False
+            else:
+                # 强制切分条件：当前内容 + 新内容超过字数限制，或者累计时长超过最大时长
+                existing_len = len(merged_subtitle[-1].content)
+                force_split = False
+                if existing_len + len(content) > max_chars:
+                    force_split = True
+                elif item_duration > max_duration:
+                    force_split = True
+                if force_split:
+                    merged_subtitle.append(item)
+                    sentence_end = False
+                else:
+                    merged_subtitle[-1].content = f"{merged_subtitle[-1].content} {content}"
+                    merged_subtitle[-1].end = item.end
 
-            # 如果当前字幕内容以标志符结尾，则设置语句已经终结
             if content.endswith(tuple(end_tokens)):
                 sentence_end = True
-            # 如果上句字幕超过一定长度，则设置语句已经终结
             elif len(merged_subtitle[-1].content) > 80:
                 sentence_end = True
             else:
@@ -1279,6 +1299,39 @@ class AutoSubv3(_PluginBase):
                                 ]
                             },
                             {
+                                'component': 'VRow',
+                                'content': [
+                                    {
+                                        'component': 'VCol',
+                                        'props': {'cols': 12, 'md': 6, 'v-show': 'enable_asr'},
+                                        'content': [
+                                            {
+                                                'component': 'VTextField',
+                                                'props': {
+                                                    'model': 'max_segment_duration',
+                                                    'label': '每段字幕最大时长（秒）',
+                                                    'placeholder': '8'
+                                                }
+                                            }
+                                        ]
+                                    },
+                                    {
+                                        'component': 'VCol',
+                                        'props': {'cols': 12, 'md': 6, 'v-show': 'enable_asr'},
+                                        'content': [
+                                            {
+                                                'component': 'VTextField',
+                                                'props': {
+                                                    'model': 'max_segment_chars',
+                                                    'label': '每段字幕最大字符数',
+                                                    'placeholder': '50'
+                                                }
+                                            }
+                                        ]
+                                    }
+                                ]
+                            },
+                            {
                                 'component': 'VCol',
                                 'props': {'cols': 12, 'md': 4, 'v-show': 'enable_asr'},
                                 'content': [
@@ -1617,6 +1670,8 @@ class AutoSubv3(_PluginBase):
             "translate_zh": False,
             "enable_asr": True,
             "auto_detect_language": False,
+            "max_segment_duration": 8.0,
+            "max_segment_chars": 50,
             "faster_whisper_model": "base",
             "proxy": True,
             "use_chatgpt": True,
