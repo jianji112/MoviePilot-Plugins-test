@@ -1749,21 +1749,6 @@ class AutoSubv3(_PluginBase):
                         "props": {"class": status_class},
                         "text": status_text
                     },
-                    {
-                        "component": "td",
-                        "content": [
-                            {
-                                "component": "VBtn",
-                                "props": {
-                                    "size": "x-small",
-                                    "color": "error",
-                                    "variant": "text",
-                                    "onclick": f"plugin.stop_task('{task_id}')"
-                                },
-                                "text": "停止"
-                            }
-                        ] if task.status == TaskStatus.IN_PROGRESS else {"component": "td", "text": "-"}
-                    },
                 ],
             })
 
@@ -1807,11 +1792,6 @@ class AutoSubv3(_PluginBase):
                                                 "props": {"class": "text-start ps-4"},
                                                 "text": "状态"
                                             },
-                                            {
-                                                "component": "th",
-                                                "props": {"class": "text-start ps-4"},
-                                                "text": "操作"
-                                            },
                                         ]
                                     },
                                     {"component": "tbody", "content": rows}
@@ -1832,11 +1812,6 @@ class AutoSubv3(_PluginBase):
         获取插件状态，如果插件正在运行， 则返回True
         """
         return self._running
-
-    def stop_task(self, task_id: str):
-        """停止指定任务"""
-        logger.info(f"用户手动停止任务: {task_id}")
-        self._event.set()
 
     def stop_service(self):
         """
