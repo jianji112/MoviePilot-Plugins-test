@@ -14,6 +14,7 @@ from lxml import etree
 from dataclasses import dataclass
 from enum import Enum
 import queue
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
 from uuid import uuid4
 from app.core.config import settings
@@ -24,8 +25,8 @@ from app.schemas.types import NotificationType, EventType
 from app.log import logger
 from app.plugins import _PluginBase
 from app.utils.system import SystemUtils
-from plugins.v2.autosubv3.ffmpeg import Ffmpeg
-from plugins.v2.autosubv3.translate.openai_translate import OpenAi
+from plugins.autosubv3.ffmpeg import Ffmpeg
+from plugins.autosubv3.translate.openai_translate import OpenAi
 
 
 class UserInterruptException(Exception):
@@ -58,19 +59,19 @@ class TaskItem:
 
 class AutoSubv3(_PluginBase):
     # 插件名称
-    plugin_name = "魔改自用版"
+    plugin_name = "AI字幕生成魔改版(v3)"
     # 插件描述
-    plugin_desc = "基于autosubv2魔改自用版"
+    plugin_desc = "自动生成字幕并翻译成中文，支持最新openai sdk，改成并发，翻译速度加倍；自用修改版；"
     # 插件图标
     plugin_icon = "autosubtitles.jpeg"
     # 主题色
     plugin_color = "#2C4F7E"
     # 插件版本
-    plugin_version = "3.4.1"
+    plugin_version = "3.5.7"
     # 插件作者
     plugin_author = "jianji112"
     # 作者主页
-    author_url = "https://github.com/TimoYoung"
+    author_url = "https://github.com/jianji112"
     # 插件配置项ID前缀
     plugin_config_prefix = "autosubv3"
     # 加载顺序
@@ -88,6 +89,7 @@ class AutoSubv3(_PluginBase):
     _enabled = None
     _clear_history = None
     _listen_transfer_event = None
+    _path_whitelist = None
     _send_notify = None
     _translate_preference = None
     _run_now = None
@@ -97,6 +99,7 @@ class AutoSubv3(_PluginBase):
     _openai = None
     _enable_batch = None
     _batch_size = None
+    _parallel_workers = None
     _context_window = None
     _max_retries = None
     _enable_merge = None
@@ -105,6 +108,8 @@ class AutoSubv3(_PluginBase):
     _huggingface_proxy = None
     _faster_whisper_model_path = None
     _faster_whisper_model = None
+    _max_segment_duration = None
+    _max_segment_chars = None
 
     def init_plugin(self, config=None):
         # 如果没有配置信息， 则不处理
@@ -114,6 +119,8 @@ class AutoSubv3(_PluginBase):
         self._enabled = config.get('enabled', False)
         self._clear_history = config.get('clear_history', False)
         self._listen_transfer_event = config.get('listen_transfer_event', True)
+        whitelist_str = config.get('path_whitelist', '').strip()
+        self._path_whitelist = [p.strip() for p in whitelist_str.split('\n') if p.strip()] if whitelist_str else []
         self._run_now = config.get('run_now')
         if self._run_now:
             self._path_list = list(set(config.get('path_list').split('\n')))
@@ -128,6 +135,8 @@ class AutoSubv3(_PluginBase):
                                                          self.get_data_path() / "faster-whisper-models")
             self._huggingface_proxy = config.get('proxy', True)
             self._auto_detect_language = config.get('auto_detect_language', False)
+            self._max_segment_duration = float(config.get('max_segment_duration')) if config.get('max_segment_duration') else 8.0
+            self._max_segment_chars = int(config.get('max_segment_chars')) if config.get('max_segment_chars') else 50
         self._translate_zh = config.get('translate_zh', False)
         if self._translate_zh:
             use_chatgpt = config.get('use_chatgpt', True)
@@ -159,6 +168,7 @@ class AutoSubv3(_PluginBase):
                                   model=openai_model, compatible=bool(compatible))
             self._enable_batch = config.get('enable_batch', True)
             self._batch_size = int(config.get('batch_size')) if config.get('batch_size') else 10
+            self._parallel_workers = int(config.get('parallel_workers')) if config.get('parallel_workers') else 5
             self._context_window = int(config.get('context_window')) if config.get('context_window') else 5
             self._max_retries = int(config.get('max_retries')) if config.get('max_retries') else 3
             self._enable_merge = config.get('enable_merge', False)
@@ -307,19 +317,25 @@ class AutoSubv3(_PluginBase):
 
         for file_path in item_file_list:
             if os.path.splitext(file_path)[-1].lower() in settings.RMT_MEDIAEXT:
-                self.add_task(file_path, TaskSource.EVENT)
+                if not self._path_whitelist or any(file_path.startswith(wp) for wp in self._path_whitelist):
+                    self.add_task(file_path, TaskSource.EVENT)
+                else:
+                    logger.debug(f"文件不在白名单路径内，跳过：{file_path}")
 
     def _run_at_once(self, path_list: List[str]):
-        # 依次处理每个目录
-        for path in path_list:
+        # 依次处理每个目录，白名单路径优先
+        effective_paths = self._path_whitelist if self._path_whitelist else path_list
+        for path in effective_paths:
             if not os.path.exists(path) or not os.path.isabs(path):
                 logger.warn(f"目录/文件无效，不进行处理:{path}")
                 continue
             if os.path.isdir(path):
                 for video_file in self.__get_library_files(path):
-                    self.add_task(video_file, TaskSource.MANUAL)
+                    if not self._path_whitelist or any(video_file.startswith(wp) for wp in self._path_whitelist):
+                        self.add_task(video_file, TaskSource.MANUAL)
             elif os.path.splitext(path)[-1].lower() in settings.RMT_MEDIAEXT:
-                self.add_task(path, TaskSource.MANUAL)
+                if not self._path_whitelist or any(path.startswith(wp) for wp in self._path_whitelist):
+                    self.add_task(path, TaskSource.MANUAL)
 
     def __check_asr(self):
         if not self._faster_whisper_model_path or not self._faster_whisper_model:
@@ -433,29 +449,29 @@ class AutoSubv3(_PluginBase):
                     raise e
 
             subs = []
-            if lang in ['en', 'eng']:
-                # 英文先生成单词级别字幕，再合并
-                idx = 0
-                for segment in segments:
-                    if self._event.is_set():
-                        logger.info(f"whisper音轨转录服务停止")
-                        raise UserInterruptException(f"用户中断当前任务")
+            # 所有语言都用 word-level 字幕，再按最大时长/字数合并
+            idx = 0
+            for segment in segments:
+                if self._event.is_set():
+                    logger.info(f"whisper音轨转录服务停止")
+                    raise UserInterruptException(f"用户中断当前任务")
+                if segment.words:
+                    # 有单词级时间戳，逐词添加
                     for word in segment.words:
                         idx += 1
                         subs.append(srt.Subtitle(index=idx,
                                                  start=timedelta(seconds=word.start),
                                                  end=timedelta(seconds=word.end),
                                                  content=word.word))
-                subs = self.__merge_srt(subs)
-            else:
-                for i, segment in enumerate(segments):
-                    if self._event.is_set():
-                        logger.info(f"whisper音轨转录服务停止")
-                        raise UserInterruptException(f"用户中断当前任务")
-                    subs.append(srt.Subtitle(index=i,
+                else:
+                    # 无单词级时间戳，使用整段
+                    idx += 1
+                    subs.append(srt.Subtitle(index=idx,
                                              start=timedelta(seconds=segment.start),
                                              end=timedelta(seconds=segment.end),
                                              content=segment.text))
+            # 按最大时长和最大字数合并
+            subs = self.__merge_srt(subs)
             self.__save_srt(f"{audio_file}.srt", subs)
             logger.info(f"音轨转字幕完成")
             return True, lang
@@ -635,21 +651,25 @@ class AutoSubv3(_PluginBase):
         with open(file_path, 'w', encoding="utf8") as f:
             f.write(srt.compose(srt_data))
 
-    def __merge_srt(self, subtitle_data):
+    def __merge_srt(self, subtitle_data, max_duration=None, max_chars=None):
         """
-        合并整句字幕
-        :param subtitle_data:
+        将单词级字幕按句子合并，并强制按最大时长/字数切分
+        :param subtitle_data: 单词级字幕列表
+        :param max_duration: 每段最大时长（秒），默认用 self._max_segment_duration
+        :param max_chars: 每段最大字符数，默认用 self._max_segment_chars
         :return:
         """
+        if max_duration is None:
+            max_duration = self._max_segment_duration or 8.0
+        if max_chars is None:
+            max_chars = self._max_segment_chars or 50
+
         subtitle_data = copy.deepcopy(subtitle_data)
-        # 合并字幕
         merged_subtitle = []
         sentence_end = True
         end_tokens = ['.', '!', '?', '。', '！', '？', '。"', '！"', '？"', '."', '!"', '?"']
         for index, item in enumerate(subtitle_data):
-            # 当前字幕先将多行合并为一行，再去除首尾空格
             content = item.content.replace('\n', ' ').strip()
-            # 去除html标签
             parse = etree.HTML(content)
             if parse is not None:
                 content = parse.xpath('string(.)')
@@ -657,22 +677,34 @@ class AutoSubv3(_PluginBase):
                 continue
             item.content = content
 
-            # 背景音等字幕，跳过
             if self.__is_noisy_subtitle(content):
                 merged_subtitle.append(item)
                 sentence_end = True
                 continue
 
+            # 计算当前字幕时长（秒）
+            item_duration = (item.end - item.start).total_seconds()
+
             if not merged_subtitle or sentence_end:
                 merged_subtitle.append(item)
-            elif not sentence_end:
-                merged_subtitle[-1].content = f"{merged_subtitle[-1].content} {content}"
-                merged_subtitle[-1].end = item.end
+                sentence_end = False
+            else:
+                # 强制切分条件：当前内容 + 新内容超过字数限制，或者累计时长超过最大时长
+                existing_len = len(merged_subtitle[-1].content)
+                force_split = False
+                if existing_len + len(content) > max_chars:
+                    force_split = True
+                elif item_duration > max_duration:
+                    force_split = True
+                if force_split:
+                    merged_subtitle.append(item)
+                    sentence_end = False
+                else:
+                    merged_subtitle[-1].content = f"{merged_subtitle[-1].content} {content}"
+                    merged_subtitle[-1].end = item.end
 
-            # 如果当前字幕内容以标志符结尾，则设置语句已经终结
             if content.endswith(tuple(end_tokens)):
                 sentence_end = True
-            # 如果上句字幕超过一定长度，则设置语句已经终结
             elif len(merged_subtitle[-1].content) > 80:
                 sentence_end = True
             else:
@@ -874,11 +906,7 @@ class AutoSubv3(_PluginBase):
     def __translate_zh_subtitle(self, source_lang: str, source_subtitle: str, dest_subtitle: str):
         self._stats = {'total': 0, 'batch_success': 0, 'batch_fail': 0, 'line_fallback': 0}
         subs = self.__load_srt(source_subtitle)
-        if source_lang in ["en", "eng"] and self._enable_merge:
-            valid_subs = self.__merge_srt(subs)
-            logger.info(f"英文字幕合并：合并前字幕数: {len(subs)},合并后字幕数: {len(valid_subs)}")
-        else:
-            valid_subs = subs
+        valid_subs = subs  # ASR阶段已统一做word-level合并，翻译时不再重复合并
         
         if not valid_subs:
             logger.warning("字幕文件为空或没有有效的字幕条目，跳过翻译")
@@ -887,20 +915,7 @@ class AutoSubv3(_PluginBase):
             return
             
         self._stats['total'] = len(valid_subs)
-        processed = []
-        current_batch = []
-
-        for item in valid_subs:
-            current_batch.append(item)
-
-            if len(current_batch) >= self._batch_size:
-                processed += self.__process_items(valid_subs, current_batch)
-                current_batch = []
-                logger.info(f"进度: {len(processed)}/{len(valid_subs)}")
-
-        if current_batch:
-            processed += self.__process_items(valid_subs, current_batch)
-
+        processed = self.__translate_parallel(valid_subs)
         self.__save_srt(dest_subtitle, processed)
         
         success_rate = (self._stats['batch_success'] / self._stats['total'] * 100) if self._stats['total'] > 0 else 0.0
@@ -912,6 +927,74 @@ class AutoSubv3(_PluginBase):
     批次失败: {self._stats['batch_fail']}
     行补偿翻译: {self._stats['line_fallback']}
             """)
+
+    def __translate_parallel(self, valid_subs: list):
+        """
+        并行翻译字幕，使用 ThreadPoolExecutor 多线程并发处理批次
+        批次按原始索引排序合并，保证顺序正确
+        """
+        total = len(valid_subs)
+        batch_size = self._batch_size
+        workers = self._parallel_workers
+
+        # 将字幕拆分为批次，每批包含 (全局索引, 字幕对象)
+        batches = []
+        for i in range(0, total, batch_size):
+            batch_items = valid_subs[i:i + batch_size]
+            # 建立 全局索引->字幕对象 的映射
+            batch_map = {}
+            for j, item in enumerate(batch_items):
+                batch_map[i + j] = item  # 用全局索引 i+j
+            batches.append((i, batch_map))
+
+        logger.info(f"并行翻译：共 {len(batches)} 批次，每批最多 {batch_size} 行，并发 {workers} 线程")
+
+        results = {}  # 最终结果：全局idx -> 处理后的字幕对象
+
+        def process_batch(batch_start_idx, batch_map):
+            """在子线程中执行：尝试批量翻译，失败则降级单行"""
+            batch_list = list(batch_map.values())
+            indices = list(batch_map.keys())  # 全局索引列表
+
+            # 尝试批量翻译
+            try:
+                context = self.__get_context(valid_subs, indices, is_batch=True) if self._context_window > 0 else None
+                batch_text = '\n'.join([item.content.strip() for item in batch_list])
+                ret, result = self.__translate_to_zh(batch_text, context)
+                if ret:
+                    translated_lines = [line.strip() for line in result.split('\n') if line.strip()]
+                    if len(translated_lines) == len(batch_list):
+                        for gidx, trans in zip(indices, translated_lines):
+                            batch_map[gidx].content = f"{trans}\n{batch_map[gidx].content}"
+                        return {gidx: batch_map[gidx] for gidx in indices}
+            except Exception as e:
+                logger.debug(f"批次 {batch_start_idx} 翻译失败，降级单行：{e}")
+
+            # 降级：逐行翻译
+            for gidx in indices:
+                item = batch_map[gidx]
+                item_context = self.__get_context(valid_subs, [gidx], is_batch=False) if self._context_window > 0 else None
+                success, trans = self.__translate_to_zh(item.content, item_context)
+                if success:
+                    item.content = f"{trans}\n{item.content}"
+            return {gidx: batch_map[gidx] for gidx in indices}
+
+        # 并行执行
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = {executor.submit(process_batch, start_idx, bmap): start_idx
+                       for start_idx, bmap in batches}
+
+            for future in as_completed(futures):
+                batch_results = future.result()
+                results.update(batch_results)
+                done_count = len(results)
+                logger.info(f"进度: {done_count}/{total}")
+
+        # 按索引排序返回
+        processed = [results[i] for i in sorted(results.keys())]
+        self._stats['batch_success'] = len(batches)
+        self._stats['line_fallback'] = total - self._stats['batch_success'] * batch_size
+        return processed
 
     @staticmethod
     def __external_subtitle_exists(video_file, prefer_langs=None, only_srt=False, strict=True):
@@ -1103,6 +1186,22 @@ class AutoSubv3(_PluginBase):
                             },
                             {
                                 'component': 'VCol',
+                                'props': {'cols': 12, 'md': 12},
+                                'content': [
+                                    {
+                                        'component': 'VTextarea',
+                                        'props': {
+                                            'model': 'path_whitelist',
+                                            'label': '路径白名单（每行一个）',
+                                            'rows': 3,
+                                            'placeholder': '/mnt/media/movies\n/downloads',
+                                            'hint': '只处理指定路径下的文件入库事件，为空则处理所有路径'
+                                        }
+                                    }
+                                ]
+                            },
+                            {
+                                'component': 'VCol',
                                 'props': {'cols': 12, 'md': 4},
                                 'content': [
                                     {
@@ -1217,6 +1316,39 @@ class AutoSubv3(_PluginBase):
                                             'label': '自动检测语言',
                                             'hint': '使用whisper模型自动检测语言，而非依赖视频元数据'
                                         }
+                                    }
+                                ]
+                            },
+                            {
+                                'component': 'VRow',
+                                'content': [
+                                    {
+                                        'component': 'VCol',
+                                        'props': {'cols': 12, 'md': 6, 'v-show': 'enable_asr'},
+                                        'content': [
+                                            {
+                                                'component': 'VTextField',
+                                                'props': {
+                                                    'model': 'max_segment_duration',
+                                                    'label': '每段字幕最大时长（秒）',
+                                                    'placeholder': '8'
+                                                }
+                                            }
+                                        ]
+                                    },
+                                    {
+                                        'component': 'VCol',
+                                        'props': {'cols': 12, 'md': 6, 'v-show': 'enable_asr'},
+                                        'content': [
+                                            {
+                                                'component': 'VTextField',
+                                                'props': {
+                                                    'model': 'max_segment_chars',
+                                                    'label': '每段字幕最大字符数',
+                                                    'placeholder': '50'
+                                                }
+                                            }
+                                        ]
                                     }
                                 ]
                             },
@@ -1448,24 +1580,6 @@ class AutoSubv3(_PluginBase):
                                                             {
                                                                 'component': 'VSwitch',
                                                                 'props': {
-                                                                    'model': 'enable_merge',
-                                                                    'label': '翻译英文时合并整句'
-                                                                }
-                                                            }
-                                                        ]
-                                                    }
-                                                ]
-                                            },
-                                            {
-                                                'component': 'VRow',
-                                                'content': [
-                                                    {
-                                                        'component': 'VCol',
-                                                        'props': {'cols': 12, 'md': 4},
-                                                        'content': [
-                                                            {
-                                                                'component': 'VSwitch',
-                                                                'props': {
                                                                     'model': 'enable_batch',
                                                                     'label': '启用批量翻译'
                                                                 }
@@ -1482,6 +1596,20 @@ class AutoSubv3(_PluginBase):
                                                                     'model': 'batch_size',
                                                                     'label': '每批翻译行数',
                                                                     'placeholder': '10'
+                                                                }
+                                                            }
+                                                        ]
+                                                    },
+                                                    {
+                                                        'component': 'VCol',
+                                                        'props': {'cols': 12, 'md': 4, 'v-show': 'enable_batch'},
+                                                        'content': [
+                                                            {
+                                                                'component': 'VTextField',
+                                                                'props': {
+                                                                    'model': 'parallel_workers',
+                                                                    'label': '并发线程数',
+                                                                    'placeholder': '5'
                                                                 }
                                                             }
                                                         ]
@@ -1515,7 +1643,7 @@ class AutoSubv3(_PluginBase):
                                             {
                                                 'component': 'a',
                                                 'props': {
-                                                    'href': 'https://github.com/jianji112/moviepilot-plugins/blob/main/plugins/autosubv3/README.md',
+                                                    'href': 'https://github.com/jianji112/MoviePilot-Plugins/blob/main/plugins/autosubv3/README.md',
                                                     'target': '_blank'
                                                 },
                                                 'content': [
@@ -1538,6 +1666,7 @@ class AutoSubv3(_PluginBase):
             "clear_history": False,
             "send_notify": False,
             "listen_transfer_event": True,
+            "path_whitelist": "",
             "run_now": False,
             "path_list": "",
             "file_size": "10",
@@ -1545,6 +1674,8 @@ class AutoSubv3(_PluginBase):
             "translate_zh": False,
             "enable_asr": True,
             "auto_detect_language": False,
+            "max_segment_duration": 8.0,
+            "max_segment_chars": 50,
             "faster_whisper_model": "base",
             "proxy": True,
             "use_chatgpt": True,
@@ -1559,6 +1690,7 @@ class AutoSubv3(_PluginBase):
             "enable_merge": False,
             "enable_batch": True,
             "batch_size": 10,
+            "parallel_workers": 5,
         }
 
     def get_api(self) -> List[Dict[str, Any]]:
