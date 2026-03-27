@@ -14,7 +14,7 @@
 
 ### 1. 注册账号
 
-访问 [硅基流动官网](https://www.siliconflow.cn/i/QhTuVb78) 注册账号。
+访问 [硅基流动官网](https://cloud.siliconflow.cn/i/QhTuVb78) 注册账号。
 
 ### 2. 获取 API Key
 
