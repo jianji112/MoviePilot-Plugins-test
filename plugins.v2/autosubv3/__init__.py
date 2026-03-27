@@ -67,7 +67,7 @@ class AutoSubv3(_PluginBase):
     # 主题色
     plugin_color = "#2C4F7E"
     # 插件版本
-    plugin_version = "3.5.12"
+    plugin_version = "3.5.13"
     # 插件作者
     plugin_author = "jianji112"
     # 作者主页
@@ -1633,8 +1633,21 @@ class AutoSubv3(_PluginBase):
                                         },
                                         'content': [
                                             {
+                                                'component': 'a',
+                                                'props': {
+                                                    'href': 'https://github.com/jianji112/MoviePilot-Plugins-test/blob/main/README.md',
+                                                    'target': '_blank'
+                                                },
+                                                'content': [
+                                                    {
+                                                        'component': 'u',
+                                                        'text': 'API申请教程'
+                                                    }
+                                                ]
+                                            },
+                                            {
                                                 'component': 'span',
-                                                'text': '详细说明参考：'
+                                                'text': ' | 详细说明参考：'
                                             },
                                             {
                                                 'component': 'a',
