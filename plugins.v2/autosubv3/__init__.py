@@ -67,7 +67,7 @@ class AutoSubv3(_PluginBase):
     # 主题色
     plugin_color = "#2C4F7E"
     # 插件版本
-    plugin_version = "3.5.10"
+    plugin_version = "3.5.11"
     # 插件作者
     plugin_author = "jianji112"
     # 作者主页
@@ -323,19 +323,17 @@ class AutoSubv3(_PluginBase):
                     logger.debug(f"文件不在白名单路径内，跳过：{file_path}")
 
     def _run_at_once(self, path_list: List[str]):
-        # 依次处理每个目录，白名单路径优先
-        effective_paths = self._path_whitelist if self._path_whitelist else path_list
-        for path in effective_paths:
+        # 立即执行一次：执行配置的媒体库目录，不受白名单限制
+        # 白名单仅在自动入库事件中生效
+        for path in path_list:
             if not os.path.exists(path) or not os.path.isabs(path):
                 logger.warn(f"目录/文件无效，不进行处理:{path}")
                 continue
             if os.path.isdir(path):
                 for video_file in self.__get_library_files(path):
-                    if not self._path_whitelist or any(video_file.startswith(wp) for wp in self._path_whitelist):
-                        self.add_task(video_file, TaskSource.MANUAL)
+                    self.add_task(video_file, TaskSource.MANUAL)
             elif os.path.splitext(path)[-1].lower() in settings.RMT_MEDIAEXT:
-                if not self._path_whitelist or any(path.startswith(wp) for wp in self._path_whitelist):
-                    self.add_task(path, TaskSource.MANUAL)
+                self.add_task(path, TaskSource.MANUAL)
 
     def __check_asr(self):
         if not self._faster_whisper_model_path or not self._faster_whisper_model:
