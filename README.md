@@ -1,21 +1,20 @@
 # AutoSubv3 魔改版 - AI字幕生成插件
 
-基于 MoviePilot 官方 autosubv2 插件魔改，增加了 AI 翻译功能。
+基于 MoviePilot autosubv2 插件魔改，支持了最新的OpenAi SDK,修改插件为并行翻译效率翻倍。
 
 ## 功能特性
 
 - 支持 OpenAI API 及兼容接口（如硅基流动）
 - 自动生成字幕（SRT格式）
 - AI 翻译为中文
-- 批量翻译优化，节省 80% tokens
-- 入库白名单过滤
-- 立即执行一次
+- 入库自动生成中文str字幕
+- 也可以手动指定路径执行
 
 ## 申请硅基流动 API
 
 ### 1. 注册账号
 
-访问 [硅基流动官网](https://www.siliconflow.cn/) 注册账号。
+访问 [硅基流动官网](https://www.siliconflow.cn/i/QhTuVb78) 注册账号。
 
 ### 2. 获取 API Key
 
@@ -23,13 +22,14 @@
 2. 点击「API Keys」菜单
 3. 点击「创建 API Key」
 4. 复制生成的 Key（格式：`sk-xxx`）
+<img width="814" height="867" alt="image" src="https://github.com/user-attachments/assets/57e520ef-9a3e-489c-8146-814d7d91f7ab" />
 
-### 3. 选择模型
 
-推荐使用性价比高的模型，如：
-- `Qwen/Qwen-Image`（翻译效果不错）
+### 3. 选择翻译模型
+
+推荐使用性价比高的无推理模型,翻译快，如：
 - `inclusionAI/Ling-flash-2.0`
-- `deepseek-ai/DeepSeek-V3.2`
+
 
 ## 配置插件
 
@@ -37,7 +37,7 @@
 
 在 MoviePilot 中添加本仓库地址：
 ```
-https://github.com/jianji112/MoviePilot-Plugins-test
+https://github.com/jianji112/MoviePilot-Plugins/
 ```
 
 ### 2. 配置参数
@@ -47,9 +47,10 @@ https://github.com/jianji112/MoviePilot-Plugins-test
 | 参数 | 说明 | 示例 |
 |------|------|------|
 | API Key | 硅基流动的 API Key | `sk-xxx...` |
-| API 地址 | API 端点 | `https://api.siliconflow.cn/v1` |
+| API 地址 | API 端点 | `https://api.siliconflow.cn` |
 | 模型 | 翻译模型名称 | `inclusionAI/Ling-flash-2.0` |
 | 批量大小 | 每批翻译条数 | `10` |
+<img width="1386" height="837" alt="image" src="https://github.com/user-attachments/assets/0189cf07-4c55-4131-8d64-5c551a64b495" />
 
 ### 3. 批量大小说明
 
@@ -57,22 +58,13 @@ https://github.com/jianji112/MoviePilot-Plugins-test
 - 批量越大速度越快，但匹配率可能下降
 - 如果翻译结果出现乱序，可降低批量大小
 
-## 翻译效果
-
-| 方案 | tokens/条 | 节省 |
-|------|-----------|------|
-| 旧方案（逐条） | ~130 | - |
-| 新方案（批量） | ~25 | **80%** |
 
 ## 常见问题
 
 ### Q: 翻译结果为空或失败？
-A: 检查 API Key 是否正确，API 地址是否包含 `/v1`
+A: 检查日志或者 API Key 是否正确;
 
-### Q: 翻译结果顺序错乱？
-A: 可能是模型返回格式问题，插件会自动降级到逐条翻译
-
-### Q: 如何查看翻译日志？
+### Q: 如何查看翻译进度？
 A: 在 MoviePilot 日志中查看插件输出
 
 ## 版本历史
