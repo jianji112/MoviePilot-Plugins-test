@@ -67,7 +67,7 @@ class AutoSubv3(_PluginBase):
     # 主题色
     plugin_color = "#2C4F7E"
     # 插件版本
-    plugin_version = "3.5.11"
+    plugin_version = "3.5.12"
     # 插件作者
     plugin_author = "jianji112"
     # 作者主页
@@ -954,27 +954,25 @@ class AutoSubv3(_PluginBase):
             batch_list = list(batch_map.values())
             indices = list(batch_map.keys())  # 全局索引列表
 
-            # 尝试批量翻译
+            # 尝试批量翻译（带行号）
             try:
-                context = self.__get_context(valid_subs, indices, is_batch=True) if self._context_window > 0 else None
-                batch_text = '\n'.join([item.content.strip() for item in batch_list])
-                ret, result = self.__translate_to_zh(batch_text, context)
-                if ret:
-                    translated_lines = [line.strip() for line in result.split('\n') if line.strip()]
-                    if len(translated_lines) == len(batch_list):
-                        for gidx, trans in zip(indices, translated_lines):
-                            batch_map[gidx].content = f"{trans}\n{batch_map[gidx].content}"
-                        return {gidx: batch_map[gidx] for gidx in indices}
+                batch_texts = [item.content.strip() for item in batch_list]
+                ret, translations = self._openai.translate_batch_to_zh(batch_texts)
+                if ret and translations and all(t is not None for t in translations):
+                    for item, trans in zip(batch_list, translations):
+                        item.content = f"{trans}\n{item.content}"
+                    return {gidx: batch_map[gidx] for gidx in indices}
             except Exception as e:
                 logger.debug(f"批次 {batch_start_idx} 翻译失败，降级单行：{e}")
 
             # 降级：逐行翻译
             for gidx in indices:
                 item = batch_map[gidx]
-                item_context = self.__get_context(valid_subs, [gidx], is_batch=False) if self._context_window > 0 else None
-                success, trans = self.__translate_to_zh(item.content, item_context)
+                success, trans = self.__translate_to_zh(item.content)
                 if success:
                     item.content = f"{trans}\n{item.content}"
+                else:
+                    item.content = f"[翻译失败]\n{item.content}"
             return {gidx: batch_map[gidx] for gidx in indices}
 
         # 并行执行
