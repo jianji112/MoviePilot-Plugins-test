@@ -19,9 +19,13 @@
 ### 2. 获取 API Key
 
 1. 登录后进入控制台
-2. 点击「API Keys」菜单
-3. 点击「创建 API Key」
-4. 复制生成的 Key（格式：`sk-xxx`）
+2. 先实名认证
+3. 认证后领取16元代金券
+  <img width="2064" height="965" alt="image" src="https://github.com/user-attachments/assets/054adb05-4f2a-4466-a85b-585659a7b32d" />
+
+5. 点击「API Keys」菜单
+6. 点击「创建 API Key」
+7. 复制生成的 Key（格式：`sk-xxx`）
 <img width="814" height="867" alt="image" src="https://github.com/user-attachments/assets/57e520ef-9a3e-489c-8146-814d7d91f7ab" />
 
 
