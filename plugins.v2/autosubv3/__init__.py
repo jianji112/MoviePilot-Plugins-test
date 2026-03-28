@@ -6,9 +6,7 @@ import traceback
 from datetime import timedelta, datetime
 from pathlib import Path
 from typing import Tuple, Dict, Any, List
-from threading import Event, Lock
-from watchdog.events import FileSystemEventHandler
-from watchdog.observers import Observer
+from threading import Event
 import iso639
 import psutil
 import srt
@@ -59,22 +57,6 @@ class TaskItem:
     complete_time: datetime = None
 
 
-class FileMonitorHandler(FileSystemEventHandler):
-    """
-    目录监控响应类，监听新增文件事件
-    """
-
-    def __init__(self, mon_path: str, plugin):
-        super(FileMonitorHandler, self).__init__()
-        self._watch_path = mon_path
-        self._plugin = plugin
-
-    def on_created(self, event):
-        if not event.is_directory:
-            logger.debug(f"检测到新文件：{event.src_path}")
-            self._plugin._add_monitor_task(event.src_path)
-
-
 class AutoSubv3(_PluginBase):
     # 插件名称
     plugin_name = "AI字幕魔改版v3"
@@ -106,6 +88,8 @@ class AutoSubv3(_PluginBase):
     _event = Event()
     _enabled = None
     _clear_history = None
+    _listen_transfer_event = None
+    _path_whitelist = None
     _send_notify = None
     _translate_preference = None
     _run_now = None
@@ -126,10 +110,6 @@ class AutoSubv3(_PluginBase):
     _faster_whisper_model = None
     _max_segment_duration = None
     _max_segment_chars = None
-    _process_new_only = None
-    _observer = None
-    _monitor_paths = None
-    _lock = Lock()
 
     def init_plugin(self, config=None):
         # 如果没有配置信息， 则不处理
@@ -138,10 +118,9 @@ class AutoSubv3(_PluginBase):
         self._tasks = self.load_tasks()
         self._enabled = config.get('enabled', False)
         self._clear_history = config.get('clear_history', False)
-        # 监控路径配置
-        monitor_str = config.get('path_whitelist', '').strip()
-        self._monitor_paths = [p.strip() for p in monitor_str.split('\n') if p.strip()] if monitor_str else []
-        self._process_new_only = config.get('process_new_only', True)
+        self._listen_transfer_event = config.get('listen_transfer_event', True)
+        whitelist_str = config.get('path_whitelist', '').strip()
+        self._path_whitelist = [p.strip() for p in whitelist_str.split('\n') if p.strip()] if whitelist_str else []
         self._run_now = config.get('run_now')
         if self._run_now:
             self._path_list = list(set(config.get('path_list').split('\n')))
@@ -211,9 +190,6 @@ class AutoSubv3(_PluginBase):
                 self._consumer_thread.start()
                 logger.info("任务队列和消费者线程已启动")
                 self._running = True
-
-            # 启动目录监控
-            self._start_file_monitor()
 
             if self._run_now:
                 config['run_now'] = False
@@ -324,54 +300,28 @@ class AutoSubv3(_PluginBase):
 
     # 监听媒体入库事件，每个事件触发一次自动字幕任务
     @eventmanager.register(EventType.TransferComplete)
-    def _start_file_monitor(self):
-        """启动目录监控"""
-        # 停止现有 observer
-        if self._observer:
-            try:
-                self._observer.stop()
-                self._observer.join(timeout=5)
-            except Exception:
-                pass
-            self._observer = None
-
-        if not self._monitor_paths:
-            logger.info("未配置监控路径，不启动目录监控")
+    def on_transfer_complete(self, event: MPEvent):
+        """监听媒体入库事件"""
+        if not self._listen_transfer_event:
+            return
+        item = event.event_data
+        item_media: MediaInfo = item.get("mediainfo")
+        logger.info(f"监听到媒体入库事件：{item_media.title}")
+        origin_lang = item_media.original_language
+        prefer_langs = ['zh', 'chi', 'zh-CN', 'chs', 'zhs', 'zh-Hans', 'zhong', 'simp', 'cn']
+        if origin_lang in prefer_langs:
+            logger.info(f"媒体原始语言为中文，跳过处理")
             return
 
-        # 全量扫描（仅处理新增关闭时）
-        if not self._process_new_only:
-            logger.info("仅处理新增关闭，开始全量扫描监控路径 ...")
-            for mon_path in self._monitor_paths:
-                if os.path.isdir(mon_path):
-                    for video_file in self._get_library_files(mon_path):
-                        self.add_task(video_file, TaskSource.EVENT)
-            logger.info("全量扫描完成")
+        item_transfer: TransferInfo = item.get("transferinfo")
+        item_file_list = item_transfer.file_list_new
 
-        # 启动 watchdog 监控
-        try:
-            self._observer = Observer(timeout=10)
-            for mon_path in self._monitor_paths:
-                if os.path.isdir(mon_path):
-                    handler = FileMonitorHandler(mon_path, self)
-                    self._observer.schedule(handler, path=mon_path, recursive=True)
-                    logger.info(f"启动目录监控：{mon_path}")
-            self._observer.daemon = True
-            self._observer.start()
-            logger.info("目录监控服务已启动")
-        except Exception as e:
-            logger.error(f"启动目录监控失败：{e}")
-            logger.error(traceback.format_exc())
-
-    def _add_monitor_task(self, file_path: str):
-        """监控处理器回调，添加新文件任务"""
-        if not os.path.exists(file_path):
-            return
-        ext = os.path.splitext(file_path)[-1].lower()
-        if ext not in settings.RMT_MEDIAEXT:
-            return
-        with self._lock:
-            self.add_task(file_path, TaskSource.EVENT)
+        for file_path in item_file_list:
+            if os.path.splitext(file_path)[-1].lower() in settings.RMT_MEDIAEXT:
+                if not self._path_whitelist or any(file_path.startswith(wp) for wp in self._path_whitelist):
+                    self.add_task(file_path, TaskSource.EVENT)
+                else:
+                    logger.debug(f"文件不在白名单路径内，跳过：{file_path}")
 
     def _run_at_once(self, path_list: List[str]):
         # 立即执行一次：执行配置的媒体库目录，不受白名单限制
@@ -1243,30 +1193,30 @@ class AutoSubv3(_PluginBase):
                         'content': [
                             {
                                 'component': 'VCol',
-                                'props': {'cols': 12, 'md': 12},
+                                'props': {'cols': 12, 'md': 4},
                                 'content': [
                                     {
-                                        'component': 'VTextarea',
+                                        'component': 'VSwitch',
                                         'props': {
-                                            'model': 'path_whitelist',
-                                            'label': '监控路径（每行一个）',
-                                            'rows': 3,
-                                            'placeholder': '/mnt/media/movies\n/downloads',
-                                            'hint': '监控目录变化，新增视频文件时自动生成字幕'
+                                            'model': 'listen_transfer_event',
+                                            'label': '媒体入库自动执行',
+                                            'hint': '监听媒体入库事件，自动执行字幕生成'
                                         }
                                     }
                                 ]
                             },
                             {
                                 'component': 'VCol',
-                                'props': {'cols': 12, 'md': 4},
+                                'props': {'cols': 12, 'md': 12},
                                 'content': [
                                     {
-                                        'component': 'VSwitch',
+                                        'component': 'VTextarea',
                                         'props': {
-                                            'model': 'process_new_only',
-                                            'label': '仅处理新增视频',
-                                            'hint': '开启后只处理新增文件；关闭后处理监控目录下所有视频'
+                                            'model': 'path_whitelist',
+                                            'label': '路径白名单（每行一个）',
+                                            'rows': 3,
+                                            'placeholder': '/mnt/media/movies\n/downloads',
+                                            'hint': '只处理指定路径下的文件入库事件，为空则处理所有路径'
                                         }
                                     }
                                 ]
@@ -1767,7 +1717,6 @@ class AutoSubv3(_PluginBase):
             "clear_history": False,
             "send_notify": False,
             "listen_transfer_event": True,
-            "process_new_only": True,
             "path_whitelist": "",
             "run_now": False,
             "path_list": "",
@@ -1939,14 +1888,6 @@ class AutoSubv3(_PluginBase):
                     task.status = TaskStatus.FAILED
                     task.complete_time = datetime.now()
             self.save_tasks()  # 持久化更新后的任务列表
-        if self._observer:
-            try:
-                self._observer.stop()
-                self._observer.join(timeout=5)
-                logger.info("目录监控已停止")
-            except Exception:
-                pass
-            self._observer = None
         self._running = False
         self._event.clear()
         logger.info(f"自动字幕生成服务已停止")
