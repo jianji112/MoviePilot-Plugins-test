@@ -59,7 +59,7 @@ class TaskItem:
 
 class AutoSubv3(_PluginBase):
     # 插件名称
-    plugin_name = "AI字幕生成魔改版(v3)"
+    plugin_name = "AI字幕魔改版v3"
     # 插件描述
     plugin_desc = "自动生成字幕并翻译成中文，支持最新openai sdk，改成并发，翻译速度加倍；自用修改版；"
     # 插件图标

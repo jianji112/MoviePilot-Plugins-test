@@ -1,6 +1,6 @@
 {
   "AutoSubv3": {
-    "name": "AI字幕生成魔改版(v3)",
+    "name": "AI字幕魔改版v3",
     "description": "自动生成字幕并翻译成中文，支持最新openai sdk，改成并发，翻译速度加倍；自用修改版；",
     "labels": "字幕,翻译",
     "version": "3.5.14",
