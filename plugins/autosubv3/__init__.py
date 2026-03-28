@@ -376,14 +376,11 @@ class AutoSubv3(_PluginBase):
                 return TaskStatus.FAILED
 
             if self._translate_zh:
-                # 翻译字幕（当源语言已是中文时跳过）
-                if lang == 'zh':
-                    logger.info(f"字幕语言已是中文，跳过翻译")
-                else:
-                    logger.info(f"开始翻译字幕为中文 ...")
-                    self.__translate_zh_subtitle(lang, gen_sub_path, f"{file_path}.zh.机翻.srt",
-                                                  output_mode=self._subtitle_output_mode)
-                    logger.info(f"翻译字幕完成：{file_name}.zh.机翻.srt")
+                # 翻译字幕（即使源语言是中文，也过LLM处理病句、繁转简、去空格）
+                logger.info(f"开始翻译字幕为中文 ...")
+                self.__translate_zh_subtitle(lang, gen_sub_path, f"{file_path}.zh.机翻.srt",
+                                              output_mode=self._subtitle_output_mode)
+                logger.info(f"翻译字幕完成：{file_name}.zh.机翻.srt")
 
             end_time = time.time()
             message = f" 媒体: {file_name}\n 处理完成\n 字幕原始语言: {lang}\n "
