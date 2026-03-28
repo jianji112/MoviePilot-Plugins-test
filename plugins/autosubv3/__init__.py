@@ -67,7 +67,7 @@ class AutoSubv3(_PluginBase):
     # 主题色
     plugin_color = "#2C4F7E"
     # 插件版本
-    plugin_version = "3.5.13"
+    plugin_version = "3.5.14"
     # 插件作者
     plugin_author = "jianji112"
     # 作者主页
@@ -172,6 +172,7 @@ class AutoSubv3(_PluginBase):
             self._context_window = int(config.get('context_window')) if config.get('context_window') else 5
             self._max_retries = int(config.get('max_retries')) if config.get('max_retries') else 3
             self._enable_merge = config.get('enable_merge', False)
+            self._subtitle_output_mode = config.get('subtitle_output_mode', 'bilingual')
 
         if self._clear_history:
             config['clear_history'] = False
@@ -375,10 +376,14 @@ class AutoSubv3(_PluginBase):
                 return TaskStatus.FAILED
 
             if self._translate_zh:
-                # 翻译字幕
-                logger.info(f"开始翻译字幕为中文 ...")
-                self.__translate_zh_subtitle(lang, gen_sub_path, f"{file_path}.zh.机翻.srt")
-                logger.info(f"翻译字幕完成：{file_name}.zh.机翻.srt")
+                # 翻译字幕（当源语言已是中文时跳过）
+                if lang == 'zh':
+                    logger.info(f"字幕语言已是中文，跳过翻译")
+                else:
+                    logger.info(f"开始翻译字幕为中文 ...")
+                    self.__translate_zh_subtitle(lang, gen_sub_path, f"{file_path}.zh.机翻.srt",
+                                                  output_mode=self._subtitle_output_mode)
+                    logger.info(f"翻译字幕完成：{file_name}.zh.机翻.srt")
 
             end_time = time.time()
             message = f" 媒体: {file_name}\n 处理完成\n 字幕原始语言: {lang}\n "
@@ -894,14 +899,28 @@ class AutoSubv3(_PluginBase):
         success, trans = self.__translate_to_zh(item.content, context)
 
         if success:
-            item.content = f"{trans}\n{item.content}"
+            if self._subtitle_output_mode == 'chinese_only':
+                item.content = trans
+            else:
+                item.content = f"{trans}\n{item.content}"
             self._stats['line_fallback'] += 1
             return item
         else:
-            item.content = f"[翻译失败]\n{item.content}"
+            if self._subtitle_output_mode == 'chinese_only':
+                item.content = f"[翻译失败]"
+            else:
+                item.content = f"[翻译失败]\n{item.content}"
             return item
 
-    def __translate_zh_subtitle(self, source_lang: str, source_subtitle: str, dest_subtitle: str):
+    def __translate_zh_subtitle(self, source_lang: str, source_subtitle: str, dest_subtitle: str,
+                                  output_mode: str = None):
+        """
+        翻译字幕为中文
+        :param source_lang: 源语言
+        :param source_subtitle: 源字幕文件路径
+        :param dest_subtitle: 目标字幕文件路径
+        :param output_mode: 输出模式，'bilingual'=双语（翻译+原文），'chinese_only'=纯中文
+        """
         self._stats = {'total': 0, 'batch_success': 0, 'batch_fail': 0, 'line_fallback': 0}
         subs = self.__load_srt(source_subtitle)
         valid_subs = subs  # ASR阶段已统一做word-level合并，翻译时不再重复合并
@@ -960,7 +979,10 @@ class AutoSubv3(_PluginBase):
                 ret, translations = self._openai.translate_batch_to_zh(batch_texts)
                 if ret and translations and all(t is not None for t in translations):
                     for item, trans in zip(batch_list, translations):
-                        item.content = f"{trans}\n{item.content}"
+                        if self._subtitle_output_mode == 'chinese_only':
+                            item.content = trans
+                        else:
+                            item.content = f"{trans}\n{item.content}"
                     return {gidx: batch_map[gidx] for gidx in indices}
             except Exception as e:
                 logger.debug(f"批次 {batch_start_idx} 翻译失败，降级单行：{e}")
@@ -970,9 +992,15 @@ class AutoSubv3(_PluginBase):
                 item = batch_map[gidx]
                 success, trans = self.__translate_to_zh(item.content)
                 if success:
-                    item.content = f"{trans}\n{item.content}"
+                    if self._subtitle_output_mode == 'chinese_only':
+                        item.content = trans
+                    else:
+                        item.content = f"{trans}\n{item.content}"
                 else:
-                    item.content = f"[翻译失败]\n{item.content}"
+                    if self._subtitle_output_mode == 'chinese_only':
+                        item.content = "[翻译失败]"
+                    else:
+                        item.content = f"[翻译失败]\n{item.content}"
             return {gidx: batch_map[gidx] for gidx in indices}
 
         # 并行执行
@@ -1584,6 +1612,23 @@ class AutoSubv3(_PluginBase):
                                                     },
                                                     {
                                                         'component': 'VCol',
+                                                        'props': {'cols': 12, 'md': 4},
+                                                        'content': [
+                                                            {
+                                                                'component': 'VSelect',
+                                                                'props': {
+                                                                    'model': 'subtitle_output_mode',
+                                                                    'label': '字幕输出模式',
+                                                                    'items': [
+                                                                        {'title': '双语字幕（翻译+原文）', 'value': 'bilingual'},
+                                                                        {'title': '纯中文字幕', 'value': 'chinese_only'}
+                                                                    ]
+                                                                }
+                                                            }
+                                                        ]
+                                                    },
+                                                    {
+                                                        'component': 'VCol',
                                                         'props': {'cols': 12, 'md': 4, 'v-show': 'enable_batch'},
                                                         'content': [
                                                             {
@@ -1697,6 +1742,7 @@ class AutoSubv3(_PluginBase):
             "context_window": 5,
             "max_retries": 3,
             "enable_merge": False,
+            "subtitle_output_mode": "bilingual",
             "enable_batch": True,
             "batch_size": 10,
             "parallel_workers": 5,
