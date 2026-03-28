@@ -1378,7 +1378,7 @@ class AutoSubv3(_PluginBase):
                             },
                             {
                                 'component': 'VCol',
-                                'props': {'cols': 12, 'md': 4, 'v-show': 'enable_asr'},
+                                'props': {'cols': 12, 'md': 6, 'v-show': 'enable_asr'},
                                 'content': [
                                     {
                                         'component': 'VSelect',
@@ -1390,6 +1390,23 @@ class AutoSubv3(_PluginBase):
                                                       {'title': 'large-v3-turbo',
                                                        'value': 'deepdml/faster-whisper-large-v3-turbo-ct2'},
                                                       ]
+                                        }
+                                    }
+                                ]
+                            },
+                            {
+                                'component': 'VCol',
+                                'props': {'cols': 12, 'md': 6, 'v-show': 'enable_asr'},
+                                'content': [
+                                    {
+                                        'component': 'VSelect',
+                                        'props': {
+                                            'model': 'subtitle_output_mode',
+                                            'label': '字幕输出模式',
+                                            'items': [
+                                                {'title': '双语字幕（翻译+原文）', 'value': 'bilingual'},
+                                                {'title': '纯中文字幕', 'value': 'chinese_only'}
+                                            ]
                                         }
                                     }
                                 ]
@@ -1606,23 +1623,6 @@ class AutoSubv3(_PluginBase):
                                                                 'props': {
                                                                     'model': 'enable_batch',
                                                                     'label': '启用批量翻译'
-                                                                }
-                                                            }
-                                                        ]
-                                                    },
-                                                    {
-                                                        'component': 'VCol',
-                                                        'props': {'cols': 12, 'md': 4},
-                                                        'content': [
-                                                            {
-                                                                'component': 'VSelect',
-                                                                'props': {
-                                                                    'model': 'subtitle_output_mode',
-                                                                    'label': '字幕输出模式',
-                                                                    'items': [
-                                                                        {'title': '双语字幕（翻译+原文）', 'value': 'bilingual'},
-                                                                        {'title': '纯中文字幕', 'value': 'chinese_only'}
-                                                                    ]
                                                                 }
                                                             }
                                                         ]
