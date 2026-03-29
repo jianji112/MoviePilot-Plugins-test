@@ -136,6 +136,15 @@ class AutoSubv3(_PluginBase):
         # 如果没有配置信息， 则不处理
         if not config:
             return
+        # 清理插件启动前的残留临时文件
+        tempdir = tempfile.gettempdir()
+        for file in os.listdir(tempdir):
+            if file.startswith('autosub-'):
+                try:
+                    os.remove(os.path.join(tempdir, file))
+                    logger.info(f"清理残留临时文件：{file}")
+                except Exception:
+                    pass
         self._tasks = self.load_tasks()
         self._enabled = config.get('enabled', False)
         self._clear_history = config.get('clear_history', False)
@@ -562,6 +571,7 @@ class AutoSubv3(_PluginBase):
                                              content=segment.text))
             # 按最大时长和最大字数合并
             subs = self.__merge_srt(subs)
+            logger.info(f"[Whisper] 提取完成，共 {idx} 条字幕")
             
             # 检查是否提取到了有效字幕内容
             if not subs:
