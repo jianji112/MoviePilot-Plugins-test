@@ -46,6 +46,7 @@ class TaskStatus(Enum):
     IN_PROGRESS = "in_progress"
     COMPLETED = "completed"
     IGNORED = "ignored"
+    NO_AUDIO = "no_audio"
     FAILED = "failed"
 
 
@@ -85,7 +86,7 @@ class AutoSubv3(_PluginBase):
     # 主题色
     plugin_color = "#2C4F7E"
     # 插件版本
-    plugin_version = "3.5.20"
+    plugin_version = "3.5.21"
     # 插件作者
     plugin_author = "jianji112"
     # 作者主页
@@ -257,6 +258,29 @@ class AutoSubv3(_PluginBase):
         tasks_dict = {task_id: self._serialize_task(task) for task_id, task in self._tasks.items()}
         self.save_data("tasks", tasks_dict)
 
+    def load_skipped_videos(self) -> Dict[str, dict]:
+        """加载无声音跳过的视频记录"""
+        return self.get_data("skipped_videos") or {}
+
+    def save_skipped_videos(self, skipped: Dict[str, dict]):
+        """保存无声音跳过的视频记录"""
+        self.save_data("skipped_videos", skipped)
+
+    def add_skipped_video(self, video_file: str):
+        """添加无声音跳过的视频记录"""
+        skipped = self.load_skipped_videos()
+        skipped[video_file] = {
+            "skip_time": datetime.now().isoformat(),
+            "reason": "no_audio"
+        }
+        self.save_skipped_videos(skipped)
+        logger.info(f"已记录无声音视频：{video_file}")
+
+    def is_video_skipped(self, video_file: str) -> bool:
+        """检查视频是否因无声音已被跳过"""
+        skipped = self.load_skipped_videos()
+        return video_file in skipped
+
     def add_task(self, video_file: str, source: TaskSource):
         """
         添加新任务到队列和任务列表中，若任务已存在则跳过。
@@ -402,29 +426,45 @@ class AutoSubv3(_PluginBase):
 
     def __process_autosub(self, video_file) -> TaskStatus:
         if not video_file:
+            logger.error(f"[Step 0] video_file 为空")
             return TaskStatus.FAILED
+        logger.info(f"[Step 1] 检查文件大小：{video_file}")
         # 如果文件大小小于指定大小， 则不处理
         if os.path.getsize(video_file) < self._file_size * 1024 * 1024:
+            logger.info(f"[Step 1] 文件小于最小大小 {self._file_size}MB，跳过")
             return TaskStatus.IGNORED
-
+        logger.info(f"[Step 2] 检查是否已标记为无声音跳过")
+        # 检查是否已标记为无声音跳过
+        if self.is_video_skipped(video_file):
+            logger.info(f"[Step 2] 视频已标记为无声音跳过：{video_file}")
+            return TaskStatus.NO_AUDIO
+        logger.info(f"[Step 3] 开始正式处理")
         start_time = time.time()
         file_path, file_ext = os.path.splitext(video_file)
         file_name = os.path.basename(video_file)
 
         try:
-            logger.info(f"开始处理文件：{video_file} ...")
+            logger.info(f"[Step 4] 判断目的字幕是否已存在：{video_file}")
             # 判断目的字幕（和内嵌）是否已存在
             if self.__target_subtitle_exists(video_file):
-                logger.warn(f"字幕文件已经存在，不进行处理")
+                logger.warn(f"[Step 4] 字幕文件已经存在，不进行处理")
                 return TaskStatus.IGNORED
+            logger.info(f"[Step 5] 生成字幕")
             # 生成字幕
             ret, lang, gen_sub_path = self.__generate_subtitle(video_file, file_path, self._enable_asr)
             if not ret:
+                # 检查是否是无声音跳过（刚记录的）
+                if self.is_video_skipped(video_file):
+                    message = f" 媒体: {file_name}\n 无声音跳过"
+                    if self._send_notify:
+                        self.post_message(mtype=NotificationType.Plugin, title="【自动字幕生成】", text=message)
+                    return TaskStatus.NO_AUDIO
                 message = f" 媒体: {file_name}\n 生成字幕失败，跳过后续处理"
                 if self._send_notify:
                     self.post_message(mtype=NotificationType.Plugin, title="【自动字幕生成】", text=message)
                 return TaskStatus.FAILED
 
+            logger.info(f"[Step 6] 翻译字幕（如果需要）")
             if self._translate_zh:
                 # 翻译字幕（即使源语言是中文，也过LLM处理病句、繁转简、去空格）
                 logger.info(f"开始翻译字幕为中文 ...")
@@ -462,8 +502,10 @@ class AutoSubv3(_PluginBase):
         :return:
         """
         lang = audio_lang
+        logger.info(f"[Whisper] 开始语音识别")
         try:
             from faster_whisper import WhisperModel, download_model
+            logger.info(f"[Whisper] 加载模型中...")
             # 设置缓存目录, 防止缓存同目录出现 cross-device 错误
             cache_dir = os.path.join(self._faster_whisper_model_path, "cache")
             if not os.path.exists(cache_dir):
@@ -484,17 +526,15 @@ class AutoSubv3(_PluginBase):
                                                   temperature=0,
                                                   beam_size=5)
                 logger.info("Detected language '%s' with probability %f" % (info.language, info.language_probability))
+                logger.info("[Whisper] 检测到语言，开始提取字幕内容")
 
                 if lang == 'auto':
                     lang = info.language
             except ValueError as e:
                 if "max() iterable argument is empty" in str(e):
-                    logger.info("音频文件中未检测到任何语言内容，生成空字幕文件以避免重复处理")
-                    # 生成空的字幕文件，避免重复识别
-                    self.__save_srt(f"{audio_file}.srt", [])
-                    # 如果原本是auto检测，设置一个默认语言
-                    lang = 'und' if lang == 'auto' else lang
-                    return True, lang
+                    logger.info("音频文件中未检测到任何语言内容，标记为无声音")
+                    # 返回 None 表示无声音，不生成空字幕文件
+                    return None, None
                 else:
                     raise e
 
@@ -522,6 +562,12 @@ class AutoSubv3(_PluginBase):
                                              content=segment.text))
             # 按最大时长和最大字数合并
             subs = self.__merge_srt(subs)
+            
+            # 检查是否提取到了有效字幕内容
+            if not subs:
+                logger.info("Whisper 提取的字幕内容为空，标记为无声音")
+                return None, None
+                
             self.__save_srt(f"{audio_file}.srt", subs)
             logger.info(f"音轨转字幕完成")
             return True, lang
@@ -541,10 +587,12 @@ class AutoSubv3(_PluginBase):
         :return: 生成成功返回True，字幕语言,字幕路径，否则返回False, None, None
         """
         # 获取文件元数据
+        logger.info(f"[GenSub] 获取视频元数据：{video_file}")
         video_meta = Ffmpeg().get_video_metadata(video_file)
         if not video_meta:
-            logger.error(f"获取视频文件元数据失败，跳过后续处理")
+            logger.error(f"[GenSub] 获取视频元数据失败，跳过后续处理")
             return False, None, None
+        logger.info(f"[GenSub] 获取视频元数据成功")
         # 获取字幕语言偏好
         if self._translate_preference == "english_only":
             prefer_subtitle_langs = ['en', 'eng']
@@ -557,6 +605,7 @@ class AutoSubv3(_PluginBase):
             strict = False
 
         # 从视频文件音轨获取语言信息
+        logger.info(f"[GenSub Step 2] 获取音轨信息")
         ret, audio_index, audio_lang = self.__get_video_prefer_audio(video_meta, prefer_lang=prefer_subtitle_langs)
         if not ret:
             logger.info(f"字幕源偏好：{self._translate_preference} 获取音轨元数据失败")
@@ -575,12 +624,14 @@ class AutoSubv3(_PluginBase):
             prefer_subtitle_langs = ['en', 'eng'] if audio_lang == 'auto' else [audio_lang,
                                                                                 iso639.to_iso639_1(audio_lang)]
         # 获取外挂字幕
+        logger.info(f"[GenSub Step 3] 检查外挂字幕")
         logger.info(f"使用 {prefer_subtitle_langs} 匹配已有外挂字幕文件 ...")
         external_sub_exist, external_sub_lang, exist_sub_name = self.__external_subtitle_exists(video_file,
                                                                                                 prefer_subtitle_langs,
                                                                                                 only_srt=True,
                                                                                                 strict=strict)
         # 获取内嵌字幕
+        logger.info(f"[GenSub Step 4] 检查内嵌字幕")
         logger.info(f"使用 {prefer_subtitle_langs} 匹配内嵌字幕文件 ...")
         inner_sub_exist, subtitle_index, inner_sub_lang, = self.__get_video_prefer_subtitle(video_meta,
                                                                                             prefer_subtitle_langs,
@@ -640,12 +691,13 @@ class AutoSubv3(_PluginBase):
 
         with tempfile.NamedTemporaryFile(prefix='autosub-', suffix='.wav', delete=True) as audio_file:
             # 提取音频
-            logger.info(f"正在提取音频：{audio_file.name} ...")
+            logger.info(f"[GenSub Step 5a] 提取音频：{audio_file.name}")
             Ffmpeg().extract_wav_from_video(video_file, audio_file.name, audio_index)
-            logger.info(f"提取音频完成：{audio_file.name}")
+            logger.info(f"[GenSub Step 5a] 提取音频完成")
+            logger.info(f"[GenSub Step 5b] 开始Whisper识别")
 
             # 生成字幕
-            logger.info(f"开始生成字幕, 语言 {audio_lang} ...")
+            logger.info(f"[GenSub Step 5] 开始Whisper识别, 语言 {audio_lang}")
             ret, lang = self.__do_speech_recognition(audio_lang, audio_file.name)
             if ret:
                 logger.info(f"生成字幕成功，原始语言：{lang}")
@@ -655,6 +707,11 @@ class AutoSubv3(_PluginBase):
                 # 删除临时文件
                 os.remove(f"{audio_file.name}.srt")
                 return ret, lang, Path(f"{subtitle_file}.{lang}.srt")
+            elif ret is None:
+                # 无声音，跳过并记录
+                logger.info(f"视频无声音，跳过字幕生成：{video_file}")
+                self.add_skipped_video(video_file)
+                return False, None, None
             else:
                 logger.error("生成字幕失败")
                 return False, None, None
@@ -1247,6 +1304,7 @@ class AutoSubv3(_PluginBase):
             TaskStatus.IN_PROGRESS: "text-warning",
             TaskStatus.COMPLETED: "text-success",
             TaskStatus.IGNORED: "text-muted",
+            TaskStatus.NO_AUDIO: "text-muted",
             TaskStatus.FAILED: "text-error"
         }
 
@@ -1262,6 +1320,7 @@ class AutoSubv3(_PluginBase):
                 TaskStatus.IN_PROGRESS: "处理中",
                 TaskStatus.COMPLETED: "已完成",
                 TaskStatus.IGNORED: "已忽略",
+                TaskStatus.NO_AUDIO: "无声音跳过",
                 TaskStatus.FAILED: "失败"
             }.get(task.status, task.status)
 
