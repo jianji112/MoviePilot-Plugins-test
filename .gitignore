@@ -1,5 +1,0 @@
-# 忽略私密文件
-**/secrets/
-**/*secret*
-**/.env
-backup/
