@@ -121,20 +121,18 @@ class OpenAi:
         :param context: 翻译上下文
         :param max_retries: 最大重试次数
         """
-        # 清理输入：去除多余空格、修复被空格分开的汉字
         text = self._clean_text(text)
-        
+
         last_error = ""
         for attempt in range(max_retries + 1):
             try:
                 completion = self.__get_model(
                     message=text,
                     system_hint="你是字幕翻译专家。直接输出翻译结果，不要任何前缀、不要保持行号、不要保留原文，只输出翻译后的中文字幕内容。",
-                    temperature=0.2,
-                    top_p=0.9
+                    temperature=0.1,
+                    top_p=0.8
                 )
                 result = completion.choices[0].message.content.strip()
-                # 清理输出：去除可能的原文残留
                 result = self._clean_text(result)
                 return True, result
             except Exception as e:
@@ -158,72 +156,68 @@ class OpenAi:
         3. 去除行号残留（如单独的 1、2、3 在一行）
         4. 去除SRT块号残留
         """
-        import re
-        # 去除时间轴行
         text = re.sub(r'\d{2}:\d{2}:\d{2},\d{3}\s*-->\s*\d{2}:\d{2}:\d{2},\d{3}', '', text)
-        # 去除单独的纯数字行（行号残留）
         text = re.sub(r'^\s*\d+\s*$', '', text, flags=re.MULTILINE)
-        # 去除块号（如 "1" 在行首后换行）
         text = re.sub(r'^\s*\d+\s*\n', '', text)
-        # 汉字之间多余空格
         text = re.sub(r'([\u4e00-\u9fff])\s+([\u4e00-\u9fff])', r'\1\2', text)
-        # 字母/数字与汉字之间多余空格
         text = re.sub(r'([\u4e00-\u9fff])\s+([a-zA-Z0-9])', r'\1\2', text)
         text = re.sub(r'([a-zA-Z0-9])\s+([\u4e00-\u9fff])', r'\1\2', text)
-        # 句尾多余空格
         text = re.sub(r'\s+\n', '\n', text)
-        # 去除每行首尾多余空格
         lines = [line.strip() for line in text.split('\n')]
         text = '\n'.join(line for line in lines if line)
         return text
 
     def translate_batch_to_zh(self, texts: List[str], max_retries: int = 3) -> Tuple[bool, List[Optional[str]]]:
         """
-        批量翻译为中文（带行号）
+        批量翻译为中文（带强约束编号）
         :param texts: 输入文本列表
         :param max_retries: 最大重试次数
         :return: (成功标志, 翻译结果列表)
         """
-        # 清理每条输入文本
         cleaned_texts = [self._clean_text(text) for text in texts]
-        
-        # 构建输入：直接用换行分隔，不要带数字前缀
-        user_prompt = "\n".join(cleaned_texts)
-        
+        numbered_lines = [f"[{idx}] {text}" for idx, text in enumerate(cleaned_texts, 1)]
+        user_prompt = "\n".join(numbered_lines)
+
         last_error = ""
         for attempt in range(max_retries + 1):
             try:
                 completion = self.__get_model(
                     message=user_prompt,
-                    system_hint="你是字幕翻译专家。直接翻译以下字幕，每行对应一条字幕的翻译结果，不要加行号前缀，不要加任何序号，只输出翻译后的纯文本，每行对应一条翻译。",
-                    temperature=0.2,
-                    top_p=0.9
+                    system_hint=(
+                        "你是字幕翻译专家。请逐条翻译下面的字幕，并严格保留每条前面的编号。"
+                        "输出格式必须是 [编号] 译文。"
+                        "不要合并条目，不要遗漏条目，不要新增解释，不要保留原文。"
+                        "一行只输出一条，编号必须与输入完全一致。"
+                    ),
+                    temperature=0.1,
+                    top_p=0.8
                 )
                 result = completion.choices[0].message.content.strip()
-                
-                # 解析输出：每行对应一条翻译
-                translated_lines = result.split('\n')
-                translations = []
-                for line in translated_lines:
+
+                translations: List[Optional[str]] = [None] * len(texts)
+                for line in result.split('\n'):
                     line = line.strip()
-                    # 去除可能的行号前缀如 "1. " 或 "1 "
-                    line = re.sub(r'^[\d]+\.\s*', '', line)
-                    translations.append(line)
-                
-                # 如果返回行数不匹配，截断或填充
-                if len(translations) > len(texts):
-                    translations = translations[:len(texts)]
-                elif len(translations) < len(texts):
-                    translations.extend([None] * (len(texts) - len(translations)))
-                
-                # 检查是否有未翻译的条目
+                    if not line:
+                        continue
+
+                    match = re.match(r'^\[(\d+)\][\s:：.-]*(.*)$', line)
+                    if not match:
+                        match = re.match(r'^(\d+)[\.、:\-\s]+(.*)$', line)
+                    if not match:
+                        continue
+
+                    idx = int(match.group(1)) - 1
+                    content = self._clean_text(match.group(2))
+                    if 0 <= idx < len(translations) and content:
+                        translations[idx] = content
+
                 failed_count = sum(1 for t in translations if t is None or not t.strip())
                 if failed_count > 0:
-                    print(f"批量翻译部分失败：{failed_count}/{len(texts)} 条为空，将降级处理")
+                    print(f"批量翻译部分失败：{failed_count}/{len(texts)} 条未按编号返回，将降级处理")
                     return False, translations
-                
+
                 return True, translations
-                
+
             except Exception as e:
                 last_error = str(e)
                 if attempt < max_retries:
