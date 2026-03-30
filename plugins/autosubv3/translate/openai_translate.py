@@ -21,7 +21,6 @@ class OpenAi:
         self._api_url = api_url
         base_url = self._api_url if compatible else self._api_url + "/v1"
 
-        # 创建 OpenAI 客户端实例
         if proxy and proxy.get("https"):
             http_client = httpx.Client(proxies=proxy.get("https"))
             self.client = openai.OpenAI(api_key=self._api_key, base_url=base_url, http_client=http_client)
@@ -33,12 +32,6 @@ class OpenAi:
 
     @staticmethod
     def __save_session(session_id: str, message: str):
-        """
-        保存会话
-        :param session_id: 会话ID
-        :param message: 消息
-        :return:
-        """
         seasion = OpenAISessionCache.get(session_id)
         if seasion:
             seasion.append({
@@ -49,11 +42,6 @@ class OpenAi:
 
     @staticmethod
     def __get_session(session_id: str, message: str) -> List[dict]:
-        """
-        获取会话
-        :param session_id: 会话ID
-        :return: 会话上下文
-        """
         seasion = OpenAISessionCache.get(session_id)
         if seasion:
             seasion.append({
@@ -73,12 +61,7 @@ class OpenAi:
             OpenAISessionCache.set(session_id, seasion)
         return seasion
 
-    def __get_model(self, message: Union[str, List[dict]],
-                    system_hint: str = None,
-                    **kwargs):
-        """
-        获取模型
-        """
+    def __get_model(self, message: Union[str, List[dict]], system_hint: str = None, **kwargs):
         if not isinstance(message, list):
             if system_hint:
                 message = [
@@ -106,21 +89,10 @@ class OpenAi:
 
     @staticmethod
     def __clear_session(session_id: str):
-        """
-        清除会话
-        :param session_id: 会话ID
-        :return:
-        """
         if OpenAISessionCache.get(session_id):
             OpenAISessionCache.delete(session_id)
 
     def translate_to_zh(self, text: str, context: str = None, max_retries: int = 3):
-        """
-        翻译为中文（单条）
-        :param text: 输入文本
-        :param context: 翻译上下文
-        :param max_retries: 最大重试次数
-        """
         text = self._clean_text(text)
 
         last_error = ""
@@ -130,7 +102,7 @@ class OpenAi:
                     message=text,
                     system_hint="你是字幕翻译专家。直接输出翻译结果，不要任何前缀、不要保持行号、不要保留原文，只输出翻译后的中文字幕内容。",
                     temperature=0.1,
-                    top_p=0.8
+                    top_p=0.3
                 )
                 result = completion.choices[0].message.content.strip()
                 result = self._clean_text(result)
@@ -149,13 +121,6 @@ class OpenAi:
 
     @staticmethod
     def _clean_text(text: str) -> str:
-        """
-        清理字幕文本：
-        1. 去除多余空格（汉字之间的空格、句首句尾空格）
-        2. 去除时间轴残留（如 00:00:00,000 --> 00:00:05,360）
-        3. 去除行号残留（如单独的 1、2、3 在一行）
-        4. 去除SRT块号残留
-        """
         text = re.sub(r'\d{2}:\d{2}:\d{2},\d{3}\s*-->\s*\d{2}:\d{2}:\d{2},\d{3}', '', text)
         text = re.sub(r'^\s*\d+\s*$', '', text, flags=re.MULTILINE)
         text = re.sub(r'^\s*\d+\s*\n', '', text)
@@ -164,16 +129,38 @@ class OpenAi:
         text = re.sub(r'([a-zA-Z0-9])\s+([\u4e00-\u9fff])', r'\1\2', text)
         text = re.sub(r'\s+\n', '\n', text)
         lines = [line.strip() for line in text.split('\n')]
-        text = '\n'.join(line for line in lines if line)
-        return text
+        return '\n'.join(line for line in lines if line)
+
+    @staticmethod
+    def _looks_invalid_batch_result(source_texts: List[str], translations: List[Optional[str]]) -> Tuple[bool, str]:
+        if len(translations) != len(source_texts):
+            return True, f"数量不匹配: {len(translations)}/{len(source_texts)}"
+
+        missing = sum(1 for t in translations if t is None or not t.strip())
+        if missing > 0:
+            return True, f"存在空结果: {missing}"
+
+        english_leak = sum(1 for t in translations if re.search(r'[A-Za-z]{3,}', t or ''))
+        if english_leak > 0:
+            return True, f"存在英文残留: {english_leak}"
+
+        normalized = [re.sub(r'[，。！？、,.!?\s]+', '', (t or '')) for t in translations]
+        duplicate_count = sum(1 for i in range(1, len(normalized)) if normalized[i] and normalized[i] == normalized[i - 1])
+        if duplicate_count >= 2:
+            return True, f"连续重复过多: {duplicate_count}"
+
+        suspicious_shift = 0
+        for src, trans in zip(source_texts, translations):
+            src = (src or '').strip()
+            trans = (trans or '').strip()
+            if len(src) <= 12 and len(trans) >= 18:
+                suspicious_shift += 1
+        if suspicious_shift >= 3:
+            return True, f"疑似跨行串义: {suspicious_shift}"
+
+        return False, ""
 
     def translate_batch_to_zh(self, texts: List[str], max_retries: int = 3) -> Tuple[bool, List[Optional[str]]]:
-        """
-        批量翻译为中文（带强约束编号）
-        :param texts: 输入文本列表
-        :param max_retries: 最大重试次数
-        :return: (成功标志, 翻译结果列表)
-        """
         cleaned_texts = [self._clean_text(text) for text in texts]
         numbered_lines = [f"[{idx}] {text}" for idx, text in enumerate(cleaned_texts, 1)]
         user_prompt = "\n".join(numbered_lines)
@@ -184,13 +171,12 @@ class OpenAi:
                 completion = self.__get_model(
                     message=user_prompt,
                     system_hint=(
-                        "你是字幕翻译专家。请逐条翻译下面的字幕，并严格保留每条前面的编号。"
-                        "输出格式必须是 [编号] 译文。"
-                        "不要合并条目，不要遗漏条目，不要新增解释，不要保留原文。"
-                        "一行只输出一条，编号必须与输入完全一致。"
+                        "逐条翻译成自然中文字幕。"
+                        "严格保留编号，格式 [编号] 译文。"
+                        "禁止跨行串义，禁止保留英文，短句单独翻。"
                     ),
                     temperature=0.1,
-                    top_p=0.8
+                    top_p=0.3
                 )
                 result = completion.choices[0].message.content.strip()
 
@@ -211,9 +197,9 @@ class OpenAi:
                     if 0 <= idx < len(translations) and content:
                         translations[idx] = content
 
-                failed_count = sum(1 for t in translations if t is None or not t.strip())
-                if failed_count > 0:
-                    print(f"批量翻译部分失败：{failed_count}/{len(texts)} 条未按编号返回，将降级处理")
+                invalid, reason = self._looks_invalid_batch_result(cleaned_texts, translations)
+                if invalid:
+                    print(f"批量翻译结果疑似串行或异常：{reason}，将降级处理")
                     return False, translations
 
                 return True, translations
