@@ -149,26 +149,9 @@ class OpenAi:
             })
 
         prompt = f"""
-你是专业字幕翻译器。
-
-规则：
-1. 不得改变 id
-2. 不得合并字幕
-3. 不得新增字幕
-4. 只翻译 text
-5. 输出 JSON 数组
-6. 输出数量必须与输入一致
-7. 每个 id 只翻译自己的 text，不要借用前后字幕的内容
-8. 要尽量口语化，符合上下文语境
-9. 遇到英文脏话时请翻译成自然中文口语，不要保留英文脏字
-
-输入：
-{json.dumps(input_batch, ensure_ascii=False)}
-
-输出示例：
-[
-  {{"id":1,"zh":"你好世界"}}
-]
+示例：输入：[{{"id":1,"text":"Hello"}}] => 输出：[{{"id":1,"zh":"你好"}}]
+请翻译：{json.dumps(input_batch, ensure_ascii=False)}
+规则：1.只翻译text到zh 2.不得改变id 3.不得合并新增条目 4.口语化 5.直接输出JSON不要其他内容。
 """.strip()
 
         last_error = ""
