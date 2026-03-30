@@ -86,7 +86,7 @@ class AutoSubv3(_PluginBase):
     # 主题色
     plugin_color = "#2C4F7E"
     # 插件版本
-    plugin_version = "3.5.26"
+    plugin_version = "3.5.28"
     # 插件作者
     plugin_author = "jianji112"
     # 作者主页
@@ -1125,31 +1125,37 @@ class AutoSubv3(_PluginBase):
 
         results = {}  # 最终结果：全局idx -> 处理后的字幕对象
 
-        def process_batch(batch_start_idx, batch_map):
+        def process_batch(batch_start_idx, batch_map, stats):
             """在子线程中执行：尝试批量翻译，失败则降级单行"""
             batch_list = list(batch_map.values())
-            indices = list(batch_map.keys())  # 全局索引列表
+            indices = list(batch_map.keys())
 
             # 尝试批量翻译（JSON结构化输出，按id校验）
             try:
                 batch_texts = [item.content.strip() for item in batch_list]
                 ret, translations = self._openai.translate_batch_to_zh(batch_texts)
+                # 严格检查：ret=True 且 translations 不为空 且 所有条目均非 None
                 if ret and translations and all(t is not None for t in translations):
                     for item, trans in zip(batch_list, translations):
                         if self._subtitle_output_mode == 'chinese_only':
                             item.content = trans
                         else:
                             item.content = f"{trans}\n{item.content}"
+                    stats["batch_ok"] += 1
+                    stats["line_ok"] += len(translations)
+                    logger.debug(f"批次 {batch_start_idx} 批量成功，{len(translations)} 条")
                     return {gidx: batch_map[gidx] for gidx in indices}
             except Exception as e:
-                logger.debug(f"批次 {batch_start_idx} 翻译失败，降级单行：{e}")
+                logger.debug(f"批次 {batch_start_idx} 批量翻译异常，降级单行：{e}")
 
-            # 降级：逐行翻译
+            # 降级：逐行翻译（最多重试1次，避免过度调用）
+            line_ok_count = 0
             for gidx in indices:
                 item = batch_map[gidx]
                 context = self.__get_context(valid_subs, [gidx], is_batch=False) if self._context_window > 0 else None
                 success, trans = self.__translate_to_zh(item.content, context)
                 if success:
+                    line_ok_count += 1
                     if self._subtitle_output_mode == 'chinese_only':
                         item.content = trans
                     else:
@@ -1159,23 +1165,30 @@ class AutoSubv3(_PluginBase):
                         item.content = "[翻译失败]"
                     else:
                         item.content = f"[翻译失败]\n{item.content}"
+            stats["line_ok"] += line_ok_count
+            stats["batch_fail"] += 1
+            logger.info(f"批次 {batch_start_idx} 降级完成：{line_ok_count}/{len(indices)} 条成功")
             return {gidx: batch_map[gidx] for gidx in indices}
+
+        # 统计计数器（在多线程间安全共享）
+        stats = {"batch_ok": 0, "batch_fail": 0, "line_ok": 0}
 
         # 并行执行
         with ThreadPoolExecutor(max_workers=workers) as executor:
-            futures = {executor.submit(process_batch, start_idx, bmap): start_idx
+            futures = {executor.submit(process_batch, start_idx, bmap, stats): start_idx
                        for start_idx, bmap in batches}
 
             for future in as_completed(futures):
                 batch_results = future.result()
                 results.update(batch_results)
                 done_count = len(results)
-                logger.info(f"进度: {done_count}/{total}")
+                logger.info(f"进度: {done_count}/{total} (批量成功 {stats["batch_ok"]}, 批量失败 {stats["batch_fail"]}, 逐条成功 {stats["line_ok"]})")
 
         # 按索引排序返回
         processed = [results[i] for i in sorted(results.keys())]
-        self._stats['batch_success'] = len(batches)
-        self._stats['line_fallback'] = total - self._stats['batch_success'] * batch_size
+        self._stats['batch_success'] = stats["batch_ok"]
+        self._stats['batch_fail'] = stats["batch_fail"]
+        self._stats['line_fallback'] = stats["line_ok"]
         return processed
 
     @staticmethod

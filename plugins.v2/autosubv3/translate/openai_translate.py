@@ -160,7 +160,7 @@ class OpenAi:
 6. 输出数量必须与输入一致
 7. 每个 id 只翻译自己的 text，不要借用前后字幕的内容
 8. 要尽量口语化，符合上下文语境
-9. 遇到英文脏话时请翻成自然中文口语，不要保留英文脏字
+9. 遇到英文脏话时请翻译成自然中文口语，不要保留英文脏字
 
 输入：
 {json.dumps(input_batch, ensure_ascii=False)}
@@ -180,27 +180,74 @@ class OpenAi:
                     top_p=1
                 )
                 raw_text = completion.choices[0].message.content.strip()
+                usage_info = getattr(completion, 'usage', None)
+                usage_str = ""
+                if usage_info:
+                    usage_str = (f"[prompt_tokens={usage_info.prompt_tokens}, "
+                                 f"completion_tokens={usage_info.completion_tokens}, "
+                                 f"total_tokens={usage_info.total_tokens}]")
+
                 clean_text = self._clean_ai_response(raw_text)
-                output_batch = json.loads(clean_text)
 
+                # 诊断日志
+                raw_len = len(raw_text)
+                clean_len = len(clean_text)
+                print(f"[BatchTranslate] attempt={attempt+1} | raw_len={raw_len} | clean_len={clean_len} {usage_str} | raw_start: {raw_text[:60].replace(chr(10),' ')}")
+
+                # 尝试解析 JSON
+                output_batch = None
+                try:
+                    output_batch = json.loads(clean_text)
+                except json.JSONDecodeError as je:
+                    import re
+                    arr_match = re.search(r'\[\s*\{.*?\}\s*\]', clean_text, flags=re.DOTALL)
+                    if arr_match:
+                        try:
+                            output_batch = json.loads(arr_match.group(0))
+                            print(f"[BatchTranslate] JSON修复成功，从正则提取")
+                        except Exception:
+                            pass
+                    if output_batch is None:
+                        raise ValueError(f"JSON解析失败: {je}")
+
+                # 验证类型
                 if not isinstance(output_batch, list):
-                    raise ValueError("AI输出不是JSON数组")
-                if not self._validate_batch(input_batch, output_batch):
-                    raise ValueError("AI输出数量或id不匹配")
+                    raise ValueError(f"输出类型错误: {type(output_batch).__name__}，期望list")
 
+                # 数量校验
+                if len(output_batch) != len(input_batch):
+                    raise ValueError(f"数量不匹配: 输入{len(input_batch)}条, 输出{len(output_batch)}条")
+
+                # ID校验
+                input_ids = [x["id"] for x in input_batch]
+                output_ids = [x.get("id") for x in output_batch]
+                if input_ids != output_ids:
+                    raise ValueError(f"id不匹配: 输入={input_ids[:5]}... 输出={output_ids[:5]}...")
+
+                # 空值校验
+                empty_zh_ids = [x.get("id") for x in output_batch
+                               if not isinstance(x.get("zh"), str) or not x.get("zh","").strip()]
+                if empty_zh_ids:
+                    raise ValueError(f"zh为空的id: {empty_zh_ids[:5]}")
+
+                # 构建结果
                 translations: List[Optional[str]] = [None] * len(texts)
                 for item in output_batch:
                     idx = int(item["id"]) - 1
                     zh = self._clean_text(item["zh"])
                     if 0 <= idx < len(translations):
                         translations[idx] = zh
+
+                print(f"[BatchTranslate] 批量成功: {len(translations)}条 {usage_str}")
                 return True, translations
+
             except Exception as e:
                 last_error = str(e)
                 if attempt < max_retries:
                     sleep_time = (2 ** attempt) + random.uniform(0.1, 0.9)
-                    print(f"批量翻译请求失败 (第{attempt + 1}次尝试)：{last_error}，{sleep_time:.1f}秒后重试...")
+                    print(f"[BatchTranslate] 失败 attempt={attempt+1}: {last_error}，重试...")
                     time.sleep(sleep_time)
                 else:
-                    print(f"批量翻译请求失败 (已重试{max_retries}次)：{last_error}")
+                    print(f"[BatchTranslate] 全局失败 (已重试{max_retries}次): {last_error}")
                     return False, [None] * len(texts)
+
