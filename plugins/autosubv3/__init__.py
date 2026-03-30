@@ -86,7 +86,7 @@ class AutoSubv3(_PluginBase):
     # 主题色
     plugin_color = "#2C4F7E"
     # 插件版本
-    plugin_version = "3.5.28"
+    plugin_version = "3.5.29"
     # 插件作者
     plugin_author = "jianji112"
     # 作者主页
@@ -1011,10 +1011,12 @@ class AutoSubv3(_PluginBase):
             return self.__process_batch(all_subs, items)
         return [self.__process_single(all_subs, item) for item in items]
 
-    def __translate_to_zh(self, text: str, context: str = None) -> str:
+    def __translate_to_zh(self, text: str, context: str = None, max_retries: int = None) -> str:
         if self._event.is_set():
             raise UserInterruptException("用户中断当前任务")
-        return self._openai.translate_to_zh(text, context, max_retries=self._max_retries)
+        if max_retries is None:
+            max_retries = self._max_retries
+        return self._openai.translate_to_zh(text, context, max_retries=max_retries)
 
     def __process_batch(self, all_subs: list, batch: list) -> list:
         """批量处理逻辑"""
@@ -1148,12 +1150,14 @@ class AutoSubv3(_PluginBase):
             except Exception as e:
                 logger.debug(f"批次 {batch_start_idx} 批量翻译异常，降级单行：{e}")
 
-            # 降级：逐行翻译（最多重试1次，避免过度调用）
+            # 降级：逐行翻译（fallback单条，仅在批次失败后执行）
+            # 逐条调用翻译（不走批量），失败时最多再重试1次，避免对已失败的条目无限重试
             line_ok_count = 0
             for gidx in indices:
                 item = batch_map[gidx]
                 context = self.__get_context(valid_subs, [gidx], is_batch=False) if self._context_window > 0 else None
-                success, trans = self.__translate_to_zh(item.content, context)
+                # 单条翻译，max_retries=1（只重试1次，避免过度调用）
+                success, trans = self.__translate_to_zh(item.content, context, max_retries=1)
                 if success:
                     line_ok_count += 1
                     if self._subtitle_output_mode == 'chinese_only':
@@ -1161,6 +1165,7 @@ class AutoSubv3(_PluginBase):
                     else:
                         item.content = f"{trans}\n{item.content}"
                 else:
+                    # 单条翻译失败，不重试（避免浪费调用次数）
                     if self._subtitle_output_mode == 'chinese_only':
                         item.content = "[翻译失败]"
                     else:
