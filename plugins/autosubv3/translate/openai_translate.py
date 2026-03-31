@@ -1,4 +1,3 @@
-import logger
 import time
 import random
 import re
@@ -85,9 +84,12 @@ class OpenAi:
     def _clean_ai_response(text: str) -> str:
         text = (text or "").strip()
         text = text.replace("```json", "").replace("```", "").strip()
+        # 贪婪正则：从第一个[到最后一个]（处理模型在JSON后多加解释文字）
         match = re.search(r'(\[.*\])', text, flags=re.S)
         if match:
-            return match.group(1).strip()
+            text = match.group(1).strip()
+        # 清理尾部逗号（JSON规范不允许）
+        text = text.replace(",]", "]").replace(",}", "}")
         return text
 
     @staticmethod
@@ -176,7 +178,8 @@ class OpenAi:
                 completion = self.__get_model(
                     message=prompt,
                     temperature=0,
-                    top_p=1
+                    top_p=1,
+                    system_hint="你是专业字幕翻译引擎"
                 )
                 raw_text = completion.choices[0].message.content.strip()
                 usage_info = getattr(completion, 'usage', None)
@@ -191,7 +194,7 @@ class OpenAi:
                 # 诊断日志
                 raw_len = len(raw_text)
                 clean_len = len(clean_text)
-                logger.info(f"[BatchTranslate] attempt={attempt+1} | raw_len={raw_len} | clean_len={clean_len} {usage_str} | raw_start: {raw_text[:60].replace(chr(10),' ')}")
+                print(f"[BatchTranslate] attempt={attempt+1} | raw_len={raw_len} | clean_len={clean_len} {usage_str} | raw_start: {raw_text[:60].replace(chr(10),' ')}")
 
                 # 尝试解析 JSON
                 output_batch = None
@@ -203,7 +206,7 @@ class OpenAi:
                     if arr_match:
                         try:
                             output_batch = json.loads(arr_match.group(0))
-                            logger.info(f"[BatchTranslate] JSON修复成功，从正则提取")
+                            print(f"[BatchTranslate] JSON修复成功，从正则提取")
                         except Exception:
                             pass
                     if output_batch is None:
@@ -237,16 +240,16 @@ class OpenAi:
                     if 0 <= idx < len(translations):
                         translations[idx] = zh
 
-                logger.info(f"[BatchTranslate] 批量成功: {len(translations)}条 {usage_str}")
+                print(f"[BatchTranslate] 批量成功: {len(translations)}条 {usage_str}")
                 return True, translations
 
             except Exception as e:
                 last_error = str(e)
                 if attempt < max_retries:
                     sleep_time = (2 ** attempt) + random.uniform(0.1, 0.9)
-                    logger.info(f"[BatchTranslate] 失败 attempt={attempt+1}: {last_error}，重试...")
+                    print(f"[BatchTranslate] 失败 attempt={attempt+1}: {last_error}，重试...")
                     time.sleep(sleep_time)
                 else:
-                    logger.info(f"[BatchTranslate] 全局失败 (已重试{max_retries}次): {last_error}")
+                    print(f"[BatchTranslate] 全局失败 (已重试{max_retries}次): {last_error}")
                     return False, [None] * len(texts)
 
