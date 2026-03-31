@@ -14,7 +14,7 @@ OpenAISessionCache = Cache(maxsize=100, ttl=3600, timer=time.time, default=None)
 class OpenAi:
     _api_key: str = None
     _api_url: str = None
-    _model: str = "gpt-4o-mini"
+    _model: str = "inclusionAI/Ling-flash-2.0"
 
     def __init__(self, api_key: str = None, api_url: str = None, proxy: dict = None, model: str = None,
                  compatible: bool = False):
