@@ -3,8 +3,10 @@
 基于 MoviePilot autosubv2 插件魔改，支持了最新的OpenAi SDK,修改插件为并行翻译效率翻倍。
 目录监控视频文件，用 Whisper AI 识别语音生成字幕，并可选用ai大模型翻译成中文自动生成srt字幕。
 
-## 设置参考
-<img width="981" height="1227" alt="image" src="https://github.com/user-attachments/assets/d5066a30-556b-4763-bbce-3e46fef8b86c" />
+## 设置参考(填这两个就行,其他保持默认,没有api的话可以看下面的申请教程)
+<img width="1497" height="1768" alt="image" src="https://github.com/user-attachments/assets/1d6cfec0-3191-4547-8822-d30a7dc7c4d6" />
+
+
 
 ## 功能特性
 
