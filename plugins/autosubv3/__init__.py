@@ -86,7 +86,7 @@ class AutoSubv3(_PluginBase):
     # 主题色
     plugin_color = "#2C4F7E"
     # 插件版本
-    plugin_version = "3.5.32"
+    plugin_version = "3.5.33"
     # 插件作者
     plugin_author = "jianji112"
     # 作者主页
@@ -577,23 +577,23 @@ class AutoSubv3(_PluginBase):
                 else:
                     raise e
 
+            # 先遍历一次获取总时长，用于百分比进度显示
+            seg_list = list(segments)
+            total_duration = seg_list[-1].end if seg_list else 0
+            total_count = len(seg_list)
             subs = []
-            # 所有语言都用 word-level 字幕，再按最大时长/字数合并
             idx = 0
-            seg_count = 0
-            last_log_time = 0
+            last_pct = 0
             import time
-            for segment in segments:
+            for segment in seg_list:
                 if self._event.is_set():
                     logger.info(f"whisper音轨转录服务停止")
                     raise UserInterruptException(f"用户中断当前任务")
-                seg_count += 1
-                # 每50段打一次进度
-                if seg_count % 50 == 0:
-                    elapsed = segment.end if hasattr(segment, 'end') else 0
-                    logger.info(f"[Whisper] 提取进度：已处理 {seg_count} 段，时长 {elapsed:.1f}s")
+                pct = int(segment.end / total_duration * 100) if total_duration > 0 else 0
+                if pct >= last_pct + 10:
+                    logger.info(f"[Whisper] 提取进度：{pct}%（{segment.end:.1f}s / {total_duration:.1f}s）")
+                    last_pct = pct
                 if segment.words:
-                    # 有单词级时间戳，逐词添加
                     for word in segment.words:
                         idx += 1
                         subs.append(srt.Subtitle(index=idx,
@@ -601,7 +601,6 @@ class AutoSubv3(_PluginBase):
                                                  end=timedelta(seconds=word.end),
                                                  content=word.word))
                 else:
-                    # 无单词级时间戳，使用整段
                     idx += 1
                     subs.append(srt.Subtitle(index=idx,
                                              start=timedelta(seconds=segment.start),
@@ -609,7 +608,7 @@ class AutoSubv3(_PluginBase):
                                              content=segment.text))
             # 按最大时长和最大字数合并
             subs = self.__merge_srt(subs)
-            logger.info(f"[Whisper] 提取完成，共处理 {seg_count} 段，合并后 {idx} 条字幕")
+            logger.info(f"[Whisper] 提取完成，共处理 {total_count} 段，合并后 {idx} 条字幕")
             
             # 检查是否提取到了有效字幕内容
             if not subs:
