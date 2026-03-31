@@ -1,20 +1,14 @@
 # AutoSubv3 魔改版 - AI字幕生成插件
-
 基于 MoviePilot autosubv2 插件魔改，支持了最新的OpenAi SDK,修改插件为并行翻译效率翻倍。
 目录监控视频文件，用 Whisper AI 识别语音生成字幕，并可选用ai大模型翻译成中文自动生成srt字幕。
 
+## 功能特性
+- 支持 OpenAI API 及兼容接口（如硅基流动）
+- 入库自动生成str字幕并用AI 翻译为中文
+- 支持选择输出双语字幕或者仅中文字幕
+
 ## 设置参考(填这两个就行,其他保持默认,没有api的话可以看下面的申请教程)
 <img width="1497" height="1768" alt="image" src="https://github.com/user-attachments/assets/1d6cfec0-3191-4547-8822-d30a7dc7c4d6" />
-
-
-
-## 功能特性
-
-- 支持 OpenAI API 及兼容接口（如硅基流动）
-- 自动生成字幕（SRT格式）
-- AI 翻译为中文
-- 入库自动生成中文str字幕
-- 也可以手动指定路径执行
 
 ## 申请硅基流动 API
 
