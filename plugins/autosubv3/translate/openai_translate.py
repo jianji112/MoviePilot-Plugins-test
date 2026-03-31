@@ -1,3 +1,4 @@
+import logger
 import time
 import random
 import re
@@ -149,9 +150,24 @@ class OpenAi:
             })
 
         prompt = f"""
-示例：输入：[{{"id":1,"text":"Hello"}}] => 输出：[{{"id":1,"zh":"你好"}}]
-请翻译：{json.dumps(input_batch, ensure_ascii=False)}
-规则：1.只翻译text到zh 2.不得改变id 3.不得合并新增条目 4.口语化 5.直接输出JSON不要其他内容。
+你是专业字幕翻译器。
+
+规则：
+1. 不得改变 id
+2. 不得合并字幕
+3. 不得新增字幕
+4. 只翻译 text
+5. 输出 JSON 数组
+6. 输出数量必须与输入一致
+7. 口语化，符合中文观影习惯
+
+输入：
+{json.dumps(input_batch, ensure_ascii=False)}
+
+输出示例：
+[
+  {{"id":1,"zh":"你好世界"}}
+]
 """.strip()
 
         last_error = ""
@@ -175,7 +191,7 @@ class OpenAi:
                 # 诊断日志
                 raw_len = len(raw_text)
                 clean_len = len(clean_text)
-                print(f"[BatchTranslate] attempt={attempt+1} | raw_len={raw_len} | clean_len={clean_len} {usage_str} | raw_start: {raw_text[:60].replace(chr(10),' ')}")
+                logger.info(f"[BatchTranslate] attempt={attempt+1} | raw_len={raw_len} | clean_len={clean_len} {usage_str} | raw_start: {raw_text[:60].replace(chr(10),' ')}")
 
                 # 尝试解析 JSON
                 output_batch = None
@@ -183,11 +199,11 @@ class OpenAi:
                     output_batch = json.loads(clean_text)
                 except json.JSONDecodeError as je:
                     import re
-                    arr_match = re.search(r'\[\s*\{.*?\}\s*\]', clean_text, flags=re.DOTALL)
+                    arr_match = re.search(r'\[\s*\{.*\}\s*\]', clean_text, flags=re.DOTALL)
                     if arr_match:
                         try:
                             output_batch = json.loads(arr_match.group(0))
-                            print(f"[BatchTranslate] JSON修复成功，从正则提取")
+                            logger.info(f"[BatchTranslate] JSON修复成功，从正则提取")
                         except Exception:
                             pass
                     if output_batch is None:
@@ -221,16 +237,16 @@ class OpenAi:
                     if 0 <= idx < len(translations):
                         translations[idx] = zh
 
-                print(f"[BatchTranslate] 批量成功: {len(translations)}条 {usage_str}")
+                logger.info(f"[BatchTranslate] 批量成功: {len(translations)}条 {usage_str}")
                 return True, translations
 
             except Exception as e:
                 last_error = str(e)
                 if attempt < max_retries:
                     sleep_time = (2 ** attempt) + random.uniform(0.1, 0.9)
-                    print(f"[BatchTranslate] 失败 attempt={attempt+1}: {last_error}，重试...")
+                    logger.info(f"[BatchTranslate] 失败 attempt={attempt+1}: {last_error}，重试...")
                     time.sleep(sleep_time)
                 else:
-                    print(f"[BatchTranslate] 全局失败 (已重试{max_retries}次): {last_error}")
+                    logger.info(f"[BatchTranslate] 全局失败 (已重试{max_retries}次): {last_error}")
                     return False, [None] * len(texts)
 
