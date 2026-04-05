@@ -11,6 +11,7 @@
 <img width="1497" height="1768" alt="image" src="https://github.com/user-attachments/assets/1d6cfec0-3191-4547-8822-d30a7dc7c4d6" />
 
 ## 申请硅基流动 API
+**[也可以用别家的api,只要是支持openai协议的都行]**
 
 ### 1. 注册账号
 
@@ -19,8 +20,8 @@
 ### 2. 获取 API Key
 
 1. 登录后进入控制台
-2. 先实名认证
-3. 认证后领取16元代金券
+2. 先**实名认证**
+3. 认证后领取**16元代金券**
   <img width="2064" height="965" alt="image" src="https://github.com/user-attachments/assets/054adb05-4f2a-4466-a85b-585659a7b32d" />
 
 5. 点击「API Keys」菜单
