@@ -86,7 +86,7 @@ class AutoSubv3(_PluginBase):
     # 主题色
     plugin_color = "#2C4F7E"
     # 插件版本
-    plugin_version = "3.5.36"
+    plugin_version = "3.5.37"
     # 插件作者
     plugin_author = "jianji112"
     # 作者主页
@@ -511,11 +511,15 @@ class AutoSubv3(_PluginBase):
                 message += f"字幕翻译语言: zh\n "
             message += f"耗时：{round(end_time - start_time, 2)}秒"
             logger.info(f"自动字幕生成 处理完成：{message}")
+            logger.info("")  # 空行分隔
+            logger.info("")  # 空行分隔
             if self._send_notify:
                 self.post_message(mtype=NotificationType.Plugin, title="【自动字幕生成】", text=message)
             return TaskStatus.COMPLETED
         except UserInterruptException:
             logger.info(f"用户中断当前任务：{video_file}")
+            logger.info("")  # 空行分隔
+            logger.info("")  # 空行分隔
             return TaskStatus.FAILED
         except Exception as e:
             logger.error(f"自动字幕生成 处理异常：{e}")
@@ -525,20 +529,24 @@ class AutoSubv3(_PluginBase):
                 self.post_message(mtype=NotificationType.Plugin, title="【自动字幕生成】", text=message)
             # 打印调用栈
             logger.error(traceback.format_exc())
+            logger.info("")  # 空行分隔
+            logger.info("")  # 空行分隔
             return TaskStatus.FAILED
 
-    def __do_speech_recognition(self, audio_lang, audio_file):
+    def __do_speech_recognition(self, audio_lang, audio_file, video_file=None):
         """
         语音识别, 生成字幕
         :param audio_lang:
         :param audio_file:
+        :param video_file: 视频文件路径（用于日志显示）
         :return:
         """
         lang = audio_lang
-        logger.info(f"[Whisper] 开始语音识别")
+        video_name = os.path.basename(video_file) if video_file else os.path.basename(audio_file)
+        logger.info(f"[Whisper音频提取文本] 开始处理: {video_name}")
         try:
             from faster_whisper import WhisperModel, download_model
-            logger.info(f"[Whisper] 加载模型中...")
+            logger.info(f"[Whisper音频提取文本] {video_name} - 加载模型中...")
             # 设置缓存目录, 防止缓存同目录出现 cross-device 错误
             cache_dir = os.path.join(self._faster_whisper_model_path, "cache")
             if not os.path.exists(cache_dir):
@@ -560,10 +568,10 @@ class AutoSubv3(_PluginBase):
                     break
                 except Exception as e:
                     if attempt < max_retries - 1:
-                        logger.warn(f"[Whisper] 模型下载失败（第{attempt+1}次），30秒后重试... 错误: {e}")
+                        logger.warn(f"[Whisper音频提取文本] {video_name} - 模型下载失败（第{attempt+1}次），30秒后重试... 错误: {e}")
                         time.sleep(30)
                     else:
-                        logger.error(f"[Whisper] 模型下载失败，已重试{max_retries}次。请检查：1) 网络连接 2) 代理配置 3) HuggingFace访问。错误: {e}")
+                        logger.error(f"[Whisper音频提取文本] {video_name} - 模型下载失败，已重试{max_retries}次。请检查：1) 网络连接 2) 代理配置 3) HuggingFace访问。错误: {e}")
                         return False, None
             
             try:
@@ -573,20 +581,21 @@ class AutoSubv3(_PluginBase):
                                                   vad_filter=True,
                                                   temperature=0,
                                                   beam_size=5)
-                logger.info(f"[Whisper] 检测到语言：{info.language}（置信度 {info.language_probability:.2%}）")
+                logger.info(f"[Whisper音频提取文本] {video_name} - 检测到语言：{info.language}（置信度 {info.language_probability:.2%}）")
 
                 detected_lang = info.language
                 if lang == 'auto':
                     lang = detected_lang
 
                 if self._skip_chinese and self.__is_chinese_lang(lang):
-                    logger.info(f"[Whisper] 检测到中文且已开启中文视频不翻译，立即跳过后续字幕提取")
+                    logger.info(f"[Whisper音频提取文本] {video_name} - 检测到中文且已开启中文视频不翻译，立即跳过后续字幕提取")
                     return "skip_chinese", lang
 
-                logger.info(f"[Whisper] 开始提取字幕内容，语言：{lang}")
+                logger.info(f"[Whisper音频提取文本] {video_name} - 开始提取字幕内容，语言：{lang}")
+                extract_start_time = time.time()
             except ValueError as e:
                 if "max() iterable argument is empty" in str(e):
-                    logger.info("音频文件中未检测到任何语言内容，标记为无声音")
+                    logger.info(f"[Whisper音频提取文本] {video_name} - 音频文件中未检测到任何语言内容，标记为无声音")
                     # 返回 None 表示无声音，不生成空字幕文件
                     return None, None
                 else:
@@ -599,14 +608,13 @@ class AutoSubv3(_PluginBase):
             subs = []
             idx = 0
             last_pct = 0
-            import time
             for segment in seg_list:
                 if self._event.is_set():
-                    logger.info(f"[Whisper] 用户中断，停止提取")
+                    logger.info(f"[Whisper音频提取文本] {video_name} - 用户中断，停止提取")
                     raise UserInterruptException(f"用户中断当前任务")
                 pct = int(segment.end / total_duration * 100) if total_duration > 0 else 0
                 if pct >= last_pct + 10:
-                    logger.info(f"[Whisper] 提取进度：{pct}%（{segment.end:.1f}s / {total_duration:.1f}s）")
+                    logger.info(f"[Whisper音频提取文本] {video_name} - 提取进度：{pct}%（{segment.end:.1f}s / {total_duration:.1f}s）")
                     last_pct = pct
                 if segment.words:
                     for word in segment.words:
@@ -623,22 +631,35 @@ class AutoSubv3(_PluginBase):
                                              content=segment.text))
             # 按最大时长和最大字数合并
             subs = self.__merge_srt(subs)
-            logger.info(f"[Whisper] 提取完成，共处理 {total_count} 段，合并后 {idx} 条字幕")
+            
+            # 计算提取耗时
+            extract_elapsed = time.time() - extract_start_time
+            logger.info(f"[Whisper音频提取文本] {video_name} - 提取完成，共处理 {total_count} 段，合并后 {idx} 条字幕，耗时 {extract_elapsed:.1f} 秒")
+            
+            # 性能警告（基于提取时长与视频时长的比例）
+            if total_duration > 0:
+                ratio = extract_elapsed / total_duration
+                if ratio >= 0.8:
+                    logger.warning(f"[Whisper音频提取文本] {video_name} - 提取耗时过长（{extract_elapsed:.1f}秒 / 视频{total_duration:.1f}秒 = {ratio:.0%}），强烈建议：1) 使用更快模型（tiny/base）2) 启用GPU加速 3) 检查CPU负载")
+                elif ratio >= 0.6:
+                    logger.warning(f"[Whisper音频提取文本] {video_name} - 提取耗时较长（{extract_elapsed:.1f}秒 / 视频{total_duration:.1f}秒 = {ratio:.0%}），建议：1) 使用更快模型（tiny/base）2) 启用GPU加速")
+                elif ratio >= 0.3:
+                    logger.info(f"[Whisper音频提取文本] {video_name} - 提取速度可优化（{extract_elapsed:.1f}秒 / 视频{total_duration:.1f}秒 = {ratio:.0%}），可考虑使用更快模型（tiny/base）")
             
             # 检查是否提取到了有效字幕内容
             if not subs:
-                logger.info("Whisper 提取的字幕内容为空，标记为无声音")
+                logger.info(f"[Whisper音频提取文本] {video_name} - 提取的字幕内容为空，标记为无声音")
                 return None, None
                 
             self.__save_srt(f"{audio_file}.srt", subs)
-            logger.info(f"音轨转字幕完成")
+            logger.info(f"[Whisper音频提取文本] {video_name} - 音轨转字幕完成")
             return True, lang
         except ImportError:
-            logger.warn(f"faster-whisper 未安装，不进行处理")
+            logger.warn(f"[Whisper音频提取文本] faster-whisper 未安装，不进行处理")
             return False, None
         except Exception as e:
             traceback.print_exc()
-            logger.error(f"faster-whisper 处理异常：{e}")
+            logger.error(f"[Whisper音频提取文本] {video_name} - 处理异常：{e}")
             return False, None
 
     def __generate_subtitle(self, video_file, subtitle_file, enable_asr=True):
@@ -760,7 +781,7 @@ class AutoSubv3(_PluginBase):
 
             # 生成字幕
             logger.info(f"[GenSub Step 5] 开始Whisper识别, 语言 {audio_lang}")
-            ret, lang = self.__do_speech_recognition(audio_lang, audio_file.name)
+            ret, lang = self.__do_speech_recognition(audio_lang, audio_file.name, video_file)
             if ret == "skip_chinese":
                 logger.info(f"视频识别为中文且已开启中文视频不翻译，跳过字幕生成：{video_file}")
                 self.add_skip_chinese_video(video_file)
@@ -1109,6 +1130,7 @@ class AutoSubv3(_PluginBase):
             return
             
         self._stats['total'] = len(valid_subs)
+        translate_start_time = time.time()
         if self._enable_batch:
             processed = self.__translate_parallel(valid_subs)
         else:
@@ -1116,9 +1138,29 @@ class AutoSubv3(_PluginBase):
             processed = [self.__process_single(valid_subs, item) for item in valid_subs]
         self.__save_srt(dest_subtitle, processed)
         
-        success_rate = (self._stats['batch_success'] / self._stats['total'] * 100) if self._stats['total'] > 0 else 0.0
-
-        logger.info(f"[翻译] 完成 - 总计 {self._stats['total']} 条，批量成功 {self._stats['batch_success']} ({success_rate:.1f}%)，批量失败 {self._stats['batch_fail']}，逐行成功 {self._stats['line_fallback']}")
+        # 计算翻译耗时和速度
+        translate_elapsed = time.time() - translate_start_time
+        speed = len(valid_subs) / translate_elapsed if translate_elapsed > 0 else 0
+        
+        # 统计报告
+        batch_success_count = self._stats['batch_success']
+        batch_fail_count = self._stats['batch_fail']
+        line_fallback_count = self._stats['line_fallback']
+        
+        # 构建日志消息
+        log_msg = f"[翻译] 完成 - 总计 {self._stats['total']} 条，耗时 {translate_elapsed:.1f} 秒，速度 {speed:.1f} 条/秒"
+        if self._enable_batch:
+            log_msg += f"，批量成功 {batch_success_count} 批"
+            if batch_fail_count > 0:
+                log_msg += f"，批量失败 {batch_fail_count} 批（降级成功 {line_fallback_count} 条）"
+        
+        logger.info(log_msg)
+        
+        # 批量失败次数过多时警告
+        if self._enable_batch and batch_fail_count > 0:
+            fail_rate = batch_fail_count / (batch_success_count + batch_fail_count) if (batch_success_count + batch_fail_count) > 0 else 0
+            if fail_rate > 0.5:
+                logger.warning(f"[翻译] 批量失败率过高（{fail_rate:.0%}），建议检查：1) LLM API稳定性 2) 降低batch_size 3) 检查prompt格式")
 
     def __translate_parallel(self, valid_subs: list):
         """
@@ -1161,7 +1203,6 @@ class AutoSubv3(_PluginBase):
                             item.content = f"{trans}\n{item.content}"
                     stats["batch_ok"] += 1
                     stats["line_ok"] += len(translations)
-                    logger.debug(f"批次 {batch_start_idx} 批量成功，{len(translations)} 条")
                     return {gidx: batch_map[gidx] for gidx in indices}
             except Exception as e:
                 logger.debug(f"批次 {batch_start_idx} 批量翻译异常，降级单行：{e}")
@@ -1207,7 +1248,7 @@ class AutoSubv3(_PluginBase):
                 # 每10%打印一次进度
                 pct = int(done_count / total * 100) if total > 0 else 0
                 if pct >= last_report_pct + 10:
-                    logger.info(f"[翻译] 进度: {pct}% ({done_count}/{total}) - 批量成功 {stats['batch_ok']}, 批量失败 {stats['batch_fail']}, 逐行成功 {stats['line_ok']}")
+                    logger.info(f"[翻译] 进度: {pct}% ({done_count}/{total}) - 已完成 {done_count} 条")
                     last_report_pct = pct
 
         # 按索引排序返回
