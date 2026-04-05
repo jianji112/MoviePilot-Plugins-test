@@ -86,7 +86,7 @@ class AutoSubv3(_PluginBase):
     # 主题色
     plugin_color = "#2C4F7E"
     # 插件版本
-    plugin_version = "3.5.36"
+    plugin_version = "3.5.35"
     # 插件作者
     plugin_author = "jianji112"
     # 作者主页
@@ -547,24 +547,9 @@ class AutoSubv3(_PluginBase):
             if self._huggingface_proxy:
                 os.environ["HTTP_PROXY"] = settings.PROXY['http']
                 os.environ["HTTPS_PROXY"] = settings.PROXY['https']
-            
-            # 模型下载重试机制
-            max_retries = 3
-            model = None
-            for attempt in range(max_retries):
-                try:
-                    model_path = download_model(self._faster_whisper_model, local_files_only=False, cache_dir=cache_dir)
-                    if model_path is None:
-                        raise ValueError("模型下载返回空路径")
-                    model = WhisperModel(model_path, device="cpu", compute_type="int8", cpu_threads=psutil.cpu_count(logical=False))
-                    break
-                except Exception as e:
-                    if attempt < max_retries - 1:
-                        logger.warn(f"[Whisper] 模型下载失败（第{attempt+1}次），30秒后重试... 错误: {e}")
-                        time.sleep(30)
-                    else:
-                        logger.error(f"[Whisper] 模型下载失败，已重试{max_retries}次。请检查：1) 网络连接 2) 代理配置 3) HuggingFace访问。错误: {e}")
-                        return False, None
+            model = WhisperModel(
+                download_model(self._faster_whisper_model, local_files_only=False, cache_dir=cache_dir),
+                device="cpu", compute_type="int8", cpu_threads=psutil.cpu_count(logical=False))
             
             try:
                 segments, info = model.transcribe(audio_file,
@@ -573,7 +558,7 @@ class AutoSubv3(_PluginBase):
                                                   vad_filter=True,
                                                   temperature=0,
                                                   beam_size=5)
-                logger.info(f"[Whisper] 检测到语言：{info.language}（置信度 {info.language_probability:.2%}）")
+                logger.info("Detected language '%s' with probability %f" % (info.language, info.language_probability))
 
                 detected_lang = info.language
                 if lang == 'auto':
@@ -583,7 +568,7 @@ class AutoSubv3(_PluginBase):
                     logger.info(f"[Whisper] 检测到中文且已开启中文视频不翻译，立即跳过后续字幕提取")
                     return "skip_chinese", lang
 
-                logger.info(f"[Whisper] 开始提取字幕内容，语言：{lang}")
+                logger.info("[Whisper] 检测到语言，开始提取字幕内容")
             except ValueError as e:
                 if "max() iterable argument is empty" in str(e):
                     logger.info("音频文件中未检测到任何语言内容，标记为无声音")
@@ -602,7 +587,7 @@ class AutoSubv3(_PluginBase):
             import time
             for segment in seg_list:
                 if self._event.is_set():
-                    logger.info(f"[Whisper] 用户中断，停止提取")
+                    logger.info(f"whisper音轨转录服务停止")
                     raise UserInterruptException(f"用户中断当前任务")
                 pct = int(segment.end / total_duration * 100) if total_duration > 0 else 0
                 if pct >= last_pct + 10:
@@ -1060,7 +1045,7 @@ class AutoSubv3(_PluginBase):
             self._stats['batch_success'] += len(batch)
             return batch
         except Exception as e:
-            logger.warning(f"[翻译] 批量翻译失败：{e}，降级逐行翻译")
+            logger.warning(f"批次翻译失败（{str(e)}），降级到单行匹配...")
             self._stats['batch_fail'] += 1
             return [self.__process_single(all_subs, item) for item in batch]
 
@@ -1112,13 +1097,19 @@ class AutoSubv3(_PluginBase):
         if self._enable_batch:
             processed = self.__translate_parallel(valid_subs)
         else:
-            logger.info(f"[翻译] 逐条模式 - 共 {len(valid_subs)} 条（效果更好，速度较慢）")
+            logger.info(f"单条翻译模式：共 {len(valid_subs)} 条，将逐条翻译（效果更好，但更慢）")
             processed = [self.__process_single(valid_subs, item) for item in valid_subs]
         self.__save_srt(dest_subtitle, processed)
         
         success_rate = (self._stats['batch_success'] / self._stats['total'] * 100) if self._stats['total'] > 0 else 0.0
-
-        logger.info(f"[翻译] 完成 - 总计 {self._stats['total']} 条，批量成功 {self._stats['batch_success']} ({success_rate:.1f}%)，批量失败 {self._stats['batch_fail']}，逐行成功 {self._stats['line_fallback']}")
+        
+        logger.info(f"""
+    翻译完成！
+    总处理条目: {self._stats['total']}
+    批次成功: {self._stats['batch_success']} ({success_rate:.1f}%)
+    批次失败: {self._stats['batch_fail']}
+    行补偿翻译: {self._stats['line_fallback']}
+            """)
 
     def __translate_parallel(self, valid_subs: list):
         """
@@ -1139,7 +1130,7 @@ class AutoSubv3(_PluginBase):
                 batch_map[i + j] = item  # 用全局索引 i+j
             batches.append((i, batch_map))
 
-        logger.info(f"[翻译] 并行模式 - 共 {len(batches)} 批次，每批 {batch_size} 条，并发 {workers} 线程")
+        logger.info(f"并行翻译：共 {len(batches)} 批次，每批最多 {batch_size} 行，并发 {workers} 线程")
 
         results = {}  # 最终结果：全局idx -> 处理后的字幕对象
 
@@ -1188,12 +1179,11 @@ class AutoSubv3(_PluginBase):
                         item.content = f"[翻译失败]\n{item.content}"
             stats["line_ok"] += line_ok_count
             stats["batch_fail"] += 1
-            logger.info(f"[翻译] 批次 {batch_start_idx} 降级逐行完成：{line_ok_count}/{len(indices)} 条成功")
+            logger.info(f"批次 {batch_start_idx} 降级完成：{line_ok_count}/{len(indices)} 条成功")
             return {gidx: batch_map[gidx] for gidx in indices}
 
         # 统计计数器（在多线程间安全共享）
         stats = {"batch_ok": 0, "batch_fail": 0, "line_ok": 0}
-        last_report_pct = -10  # 上次报告进度百分比，初始-10确保第一条打印
 
         # 并行执行
         with ThreadPoolExecutor(max_workers=workers) as executor:
@@ -1204,11 +1194,7 @@ class AutoSubv3(_PluginBase):
                 batch_results = future.result()
                 results.update(batch_results)
                 done_count = len(results)
-                # 每10%打印一次进度
-                pct = int(done_count / total * 100) if total > 0 else 0
-                if pct >= last_report_pct + 10:
-                    logger.info(f"[翻译] 进度: {pct}% ({done_count}/{total}) - 批量成功 {stats['batch_ok']}, 批量失败 {stats['batch_fail']}, 逐行成功 {stats['line_ok']}")
-                    last_report_pct = pct
+                logger.info(f"进度: {done_count}/{total} (批量成功 {stats["batch_ok"]}, 批量失败 {stats["batch_fail"]}, 逐条成功 {stats["line_ok"]})")
 
         # 按索引排序返回
         processed = [results[i] for i in sorted(results.keys())]
